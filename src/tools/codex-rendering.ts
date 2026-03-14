@@ -11,6 +11,27 @@ export function renderExecCommandCall(command: string, state: ExecCommandStatus,
 	return summary.maskAsExplored ? renderExplorationText(summary.actions, state, theme) : renderCommandText(command, state, theme);
 }
 
+export function renderWriteStdinCall(
+	sessionId: number | string,
+	input: string | undefined,
+	command: string | undefined,
+	theme: RenderTheme,
+): string {
+	const interacted = typeof input === "string" && input.length > 0;
+	const marker = interacted ? "↳ " : "• ";
+	const title = interacted ? "Interacted with background terminal" : "Waited for background terminal";
+	let text = `${theme.fg("dim", marker)}${theme.bold(title)}`;
+	const commandPreview = formatCommandPreview(command);
+	if (commandPreview) {
+		text += `${theme.fg("dim", " · ")}${theme.fg("muted", commandPreview)}`;
+	}
+	// Keep the session fallback only when we do not have a stable command display.
+	if (!commandPreview) {
+		text += `${theme.fg("dim", " ")}${theme.fg("muted", `#${sessionId}`)}`;
+	}
+	return text;
+}
+
 function renderExplorationText(actions: ShellAction[], state: ExecCommandStatus, theme: RenderTheme): string {
 	const header = state === "running" ? "Exploring" : "Explored";
 	let text = `${theme.fg("dim", "•")} ${theme.bold(header)}`;
@@ -34,6 +55,13 @@ function shortenCommand(command: string, max = 100): string {
 	const trimmed = command.trim();
 	if (trimmed.length <= max) return trimmed;
 	return `${trimmed.slice(0, max - 3)}...`;
+}
+
+function formatCommandPreview(command: string | undefined): string | undefined {
+	if (!command) return undefined;
+	const singleLine = command.replace(/\s+/g, " ").trim();
+	if (singleLine.length === 0) return undefined;
+	return shortenCommand(singleLine, 80);
 }
 
 function formatActionLine(action: ShellAction): { title: string; body: string } {

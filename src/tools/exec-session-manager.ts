@@ -34,7 +34,7 @@ interface BaseExecSession {
 	id: number;
 	command: string;
 	buffer: string;
-	cursor: number;
+	emittedBuffer: string;
 	exitCode: number | null | undefined;
 	listeners: Set<() => void>;
 	interactive: boolean;
@@ -48,6 +48,9 @@ interface PipeExecSession extends BaseExecSession {
 interface PtyExecSession extends BaseExecSession {
 	kind: "pty";
 	child: pty.IPty;
+	terminalCommitted: string;
+	terminalLine: string[];
+	terminalCursor: number;
 }
 
 type ExecSession = PipeExecSession | PtyExecSession;
@@ -66,6 +69,7 @@ const DEFAULT_WRITE_YIELD_TIME_MS = 250;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const MIN_YIELD_TIME_MS = 250;
 const MAX_YIELD_TIME_MS = 30_000;
+const MAX_COMMAND_HISTORY = 256;
 
 function resolveWorkdir(baseCwd: string, workdir?: string): string {
 	if (!workdir) return baseCwd;
@@ -85,20 +89,23 @@ function maxCharsForTokens(maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS): number 
 	return Math.max(256, maxOutputTokens * 4);
 }
 
-function stripTerminalControlSequences(text: string): string {
-	return text
+function stripTerminalControlSequences(text: string, preserveCsi = false): string {
+	const withoutOscAndDcs = text
 		.replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/g, "")
-		.replace(/\u001B[P_X^][\s\S]*?\u001B\\/g, "")
-		.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
-		.replace(/\u001B[@-_]/g, "");
+		.replace(/\u001B[P_X^][\s\S]*?\u001B\\/g, "");
+	if (preserveCsi) {
+		return withoutOscAndDcs;
+	}
+	return withoutOscAndDcs.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "").replace(/\u001B[@-_]/g, "");
 }
 
-function sanitizeBinaryOutput(text: string): string {
+function sanitizeBinaryOutput(text: string, preserveBackspace = false): string {
 	return Array.from(text)
 		.filter((char) => {
 			const code = char.codePointAt(0);
 			if (code === undefined) return false;
 			if (code === 0x09 || code === 0x0a || code === 0x0d) return true;
+			if (preserveBackspace && code === 0x08) return true;
 			if (code <= 0x1f) return false;
 			if (code >= 0xfff9 && code <= 0xfffb) return false;
 			return true;
@@ -106,8 +113,107 @@ function sanitizeBinaryOutput(text: string): string {
 		.join("");
 }
 
-function normalizeOutput(text: string): string {
+function normalizePipeOutput(text: string): string {
 	return sanitizeBinaryOutput(stripTerminalControlSequences(text)).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function writeTerminalChar(session: PtyExecSession, char: string): void {
+	if (session.terminalCursor > session.terminalLine.length) {
+		session.terminalLine.push(...Array.from({ length: session.terminalCursor - session.terminalLine.length }, () => " "));
+	}
+	session.terminalLine[session.terminalCursor] = char;
+	session.terminalCursor += 1;
+}
+
+function applyTerminalOutput(session: PtyExecSession, text: string): string {
+	const sanitized = stripTerminalControlSequences(text, true);
+	if (sanitized.length === 0) {
+		return session.terminalCommitted + session.terminalLine.join("");
+	}
+
+	for (let index = 0; index < sanitized.length; index += 1) {
+		const char = sanitized[index]!;
+		if (char === "\u001b") {
+			if (sanitized[index + 1] === "[") {
+				let sequenceEnd = index + 2;
+				while (sequenceEnd < sanitized.length) {
+					const code = sanitized.charCodeAt(sequenceEnd);
+					if (code >= 0x40 && code <= 0x7e) {
+						break;
+					}
+					sequenceEnd += 1;
+				}
+				if (sequenceEnd >= sanitized.length) {
+					break;
+				}
+				const params = sanitized.slice(index + 2, sequenceEnd);
+				const finalByte = sanitized[sequenceEnd];
+				if (finalByte === "K") {
+					const mode = Number(params || "0");
+					if (mode === 0) {
+						session.terminalLine = session.terminalLine.slice(0, session.terminalCursor);
+					} else if (mode === 1) {
+						session.terminalLine = [
+							...Array.from({ length: Math.min(session.terminalCursor, session.terminalLine.length) }, () => " "),
+							...session.terminalLine.slice(session.terminalCursor),
+						];
+					} else if (mode === 2) {
+						session.terminalLine = [];
+					}
+				}
+				index = sequenceEnd;
+				continue;
+			}
+
+			const next = sanitized[index + 1];
+			if (next && /[()*+,\-./]/.test(next) && index + 2 < sanitized.length) {
+				index += 2;
+				continue;
+			}
+			if (next) {
+				index += 1;
+			}
+			continue;
+		}
+
+		const code = char.codePointAt(0);
+		if (code !== undefined && code <= 0x1f && char !== "\t" && char !== "\n" && char !== "\r" && char !== "\b") {
+			continue;
+		}
+
+		switch (char) {
+			case "\r":
+				session.terminalCursor = 0;
+				break;
+			case "\n":
+				session.terminalCommitted += `${session.terminalLine.join("")}\n`;
+				session.terminalLine = [];
+				session.terminalCursor = 0;
+				break;
+			case "\b":
+				session.terminalCursor = Math.max(0, session.terminalCursor - 1);
+				break;
+			default:
+				writeTerminalChar(session, char);
+				break;
+		}
+	}
+
+	return session.terminalCommitted + session.terminalLine.join("");
+}
+
+function computePtyDelta(previous: string, current: string): string {
+	if (current.startsWith(previous)) {
+		return current.slice(previous.length);
+	}
+
+	const lineStart = previous.lastIndexOf("\n") + 1;
+	const stablePrefix = previous.slice(0, lineStart);
+	if (current.startsWith(stablePrefix)) {
+		return `\r${current.slice(lineStart)}`;
+	}
+
+	return current;
 }
 
 function generateChunkId(): string {
@@ -115,8 +221,9 @@ function generateChunkId(): string {
 }
 
 function consumeOutput(session: ExecSession, maxOutputTokens?: number): { output: string; original_token_count?: number } {
-	const text = session.buffer.slice(session.cursor);
-	session.cursor = session.buffer.length;
+	const text =
+		session.kind === "pty" ? computePtyDelta(session.emittedBuffer, session.buffer) : session.buffer.slice(session.emittedBuffer.length);
+	session.emittedBuffer = session.buffer;
 	if (text.length === 0) {
 		return { output: "" };
 	}
@@ -151,7 +258,19 @@ function registerAbortHandler(signal: AbortSignal | undefined, onAbort: () => vo
 export function createExecSessionManager(): ExecSessionManager {
 	let nextSessionId = 1;
 	const sessions = new Map<number, ExecSession>();
+	const commandHistory = new Map<number, string>();
 	const exitListeners = new Set<(sessionId: number, command: string) => void>();
+
+	function rememberCommand(sessionId: number, command: string): void {
+		commandHistory.set(sessionId, command);
+		if (commandHistory.size <= MAX_COMMAND_HISTORY) {
+			return;
+		}
+		const oldest = commandHistory.keys().next().value;
+		if (oldest !== undefined) {
+			commandHistory.delete(oldest);
+		}
+	}
 
 	function notify(session: ExecSession): void {
 		for (const listener of session.listeners) {
@@ -168,12 +287,13 @@ export function createExecSessionManager(): ExecSessionManager {
 
 	function appendOutput(session: ExecSession, text: string): void {
 		if (text.length === 0) return;
-		session.buffer += normalizeOutput(text);
+		session.buffer =
+			session.kind === "pty" ? applyTerminalOutput(session, text) : `${session.buffer}${normalizePipeOutput(text)}`;
 		notify(session);
 	}
 
 	function waitForActivity(session: ExecSession, yieldTimeMs: number): Promise<number> {
-		if (session.buffer.length > session.cursor || session.exitCode !== undefined && session.exitCode !== null) {
+		if (session.buffer !== session.emittedBuffer || session.exitCode !== undefined && session.exitCode !== null) {
 			return Promise.resolve(0);
 		}
 
@@ -206,7 +326,7 @@ export function createExecSessionManager(): ExecSessionManager {
 			result.session_id = session.id;
 		} else {
 			result.exit_code = session.exitCode;
-			if (session.cursor >= session.buffer.length) {
+			if (session.emittedBuffer === session.buffer) {
 				sessions.delete(session.id);
 			}
 		}
@@ -228,7 +348,7 @@ export function createExecSessionManager(): ExecSessionManager {
 			command: input.cmd,
 			child,
 			buffer: "",
-			cursor: 0,
+			emittedBuffer: "",
 			exitCode: undefined,
 			listeners: new Set(),
 			interactive: false,
@@ -276,10 +396,13 @@ export function createExecSessionManager(): ExecSessionManager {
 			command: input.cmd,
 			child,
 			buffer: "",
-			cursor: 0,
+			emittedBuffer: "",
 			exitCode: undefined,
 			listeners: new Set(),
 			interactive: true,
+			terminalCommitted: "",
+			terminalLine: [],
+			terminalCursor: 0,
 		};
 
 		child.onData((data) => {
@@ -307,6 +430,7 @@ export function createExecSessionManager(): ExecSessionManager {
 				? createPtySession(input, workdir, shell, signal)
 				: createPipeSession(input, workdir, shell, signal);
 			sessions.set(session.id, session);
+			rememberCommand(session.id, session.command);
 
 			const waitedMs = await waitForActivity(session, clampYieldTime(input.yield_time_ms, DEFAULT_EXEC_YIELD_TIME_MS));
 			return makeResult(session, waitedMs, input.max_output_tokens);
@@ -331,7 +455,7 @@ export function createExecSessionManager(): ExecSessionManager {
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
 		hasSession: (sessionId) => sessions.has(sessionId),
-		getSessionCommand: (sessionId) => sessions.get(sessionId)?.command,
+		getSessionCommand: (sessionId) => sessions.get(sessionId)?.command ?? commandHistory.get(sessionId),
 		onSessionExit: (listener) => {
 			exitListeners.add(listener);
 			return () => exitListeners.delete(listener);
@@ -348,6 +472,7 @@ export function createExecSessionManager(): ExecSessionManager {
 				}
 			}
 			sessions.clear();
+			commandHistory.clear();
 		},
 	};
 }

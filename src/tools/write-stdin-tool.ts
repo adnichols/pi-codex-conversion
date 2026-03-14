@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
+import { renderWriteStdinCall } from "./codex-rendering.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./exec-session-manager.ts";
 import { formatUnifiedExecResult } from "./unified-exec-format.ts";
 
@@ -16,6 +17,72 @@ interface WriteStdinParams {
 	chars?: string;
 	yield_time_ms?: number;
 	max_output_tokens?: number;
+}
+
+interface FormattedExecTranscript {
+	output: string;
+	sessionId?: number;
+	exitCode?: number;
+}
+
+function parseFormattedExecTranscript(text: string): FormattedExecTranscript {
+	const marker = "\nOutput:\n";
+	const markerIndex = text.indexOf(marker);
+	const output = markerIndex !== -1 ? text.slice(markerIndex + marker.length) : text;
+	const sessionMatch = text.match(/Process running with session ID (\d+)/);
+	const exitCodeMatch = text.match(/Process exited with code (-?\d+)/);
+	return {
+		output,
+		sessionId: sessionMatch ? Number(sessionMatch[1]) : undefined,
+		exitCode: exitCodeMatch ? Number(exitCodeMatch[1]) : undefined,
+	};
+}
+
+function renderTerminalText(text: string): string {
+	let committed = "";
+	let line: string[] = [];
+	let cursor = 0;
+
+	for (const char of text) {
+		switch (char) {
+			case "\r":
+				cursor = 0;
+				break;
+			case "\n":
+				committed += `${line.join("")}\n`;
+				line = [];
+				cursor = 0;
+				break;
+			case "\b":
+				cursor = Math.max(0, cursor - 1);
+				break;
+			default:
+				if (cursor > line.length) {
+					line.push(...Array.from({ length: cursor - line.length }, () => " "));
+				}
+				line[cursor] = char;
+				cursor += 1;
+				break;
+		}
+	}
+
+	return committed + line.join("");
+}
+
+function getResultState(result: { details?: unknown; content: Array<{ type: string; text?: string }> }): FormattedExecTranscript {
+	const details = isUnifiedExecResult(result.details) ? result.details : undefined;
+	const content = result.content.find((item) => item.type === "text");
+	if (details) {
+		return {
+			output: details.output,
+			sessionId: details.session_id,
+			exitCode: details.exit_code,
+		};
+	}
+	if (content?.type === "text") {
+		return parseFormattedExecTranscript(content.text ?? "");
+	}
+	return { output: "" };
 }
 
 function parseWriteStdinParams(params: unknown): WriteStdinParams {
@@ -57,18 +124,20 @@ export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionMa
 		},
 		renderCall(args, theme) {
 			const sessionId = typeof args.session_id === "number" ? args.session_id : "?";
-			return new Text(`${theme.fg("toolTitle", theme.bold("write_stdin"))} ${theme.fg("accent", String(sessionId))}`, 0, 0);
+			const input = typeof args.chars === "string" ? args.chars : undefined;
+			const command = typeof sessionId === "number" ? sessions.getSessionCommand(sessionId) : undefined;
+			return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
 		},
 		renderResult(result, { expanded, isPartial }, theme) {
 			if (isPartial || !expanded) return undefined;
-			const details = isUnifiedExecResult(result.details) ? result.details : undefined;
-			const output = details?.output ?? "(no output)";
+			const state = getResultState(result);
+			const output = renderTerminalText(state.output);
 			let text = theme.fg("dim", output || "(no output)");
-			if (details?.session_id !== undefined) {
-				text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
+			if (state.sessionId !== undefined) {
+				text += `\n${theme.fg("accent", `Session ${state.sessionId} still running`)}`;
 			}
-			if (details?.exit_code !== undefined) {
-				text += `\n${theme.fg("muted", `Exit code: ${details.exit_code}`)}`;
+			if (state.exitCode !== undefined) {
+				text += `\n${theme.fg("muted", `Exit code: ${state.exitCode}`)}`;
 			}
 			return new Text(text, 0, 0);
 		},

@@ -113,3 +113,87 @@ test("exec session manager strips terminal control noise from PTY output", async
 		sessions.shutdown();
 	}
 });
+
+test("exec session manager strips non-CSI escape sequences from PTY output", async () => {
+	const sessions = createExecSessionManager();
+	try {
+		let result = await sessions.exec(
+			{
+				cmd: "printf '\\033(Bok\\n'",
+				shell: "/bin/bash",
+				login: false,
+				tty: true,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+
+		let output = result.output;
+		for (let attempt = 0; attempt < 5 && result.session_id !== undefined; attempt++) {
+			result = await sessions.write({ session_id: result.session_id, yield_time_ms: 50 });
+			output += result.output;
+		}
+
+		assert.equal(output, "ok\n");
+		assert.equal(result.exit_code, 0);
+		assert.equal(result.session_id, undefined);
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("exec session manager applies basic PTY cursor semantics for carriage returns and backspaces", async () => {
+	const sessions = createExecSessionManager();
+	try {
+		let result = await sessions.exec(
+			{
+				cmd: "printf 'foo\\rbar\\nabc\\b\\bde\\n'",
+				shell: "/bin/bash",
+				login: false,
+				tty: true,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+
+		let output = result.output;
+		for (let attempt = 0; attempt < 5 && result.session_id !== undefined; attempt++) {
+			result = await sessions.write({ session_id: result.session_id, yield_time_ms: 50 });
+			output += result.output;
+		}
+
+		assert.equal(output, "bar\nade\n");
+		assert.equal(result.exit_code, 0);
+		assert.equal(result.session_id, undefined);
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("exec session manager replays PTY line rewrites correctly across multiple polls", async () => {
+	const sessions = createExecSessionManager();
+	try {
+		let result = await sessions.exec(
+			{
+				cmd: "printf foo; sleep 0.3; printf '\\r\\033[Kbar'; sleep 0.3; printf '\\n'",
+				shell: "/bin/bash",
+				login: false,
+				tty: true,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+
+		let replay = result.output;
+		for (let attempt = 0; attempt < 8 && result.session_id !== undefined; attempt++) {
+			result = await sessions.write({ session_id: result.session_id, yield_time_ms: 100 });
+			replay += result.output;
+		}
+
+		assert.equal(replay, "foo\rbar\n");
+		assert.equal(result.exit_code, 0);
+		assert.equal(result.session_id, undefined);
+	} finally {
+		sessions.shutdown();
+	}
+});

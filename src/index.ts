@@ -5,13 +5,14 @@ import { isCodexLikeContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
 import { createExecSessionManager } from "./tools/exec-session-manager.ts";
-import { buildCodexSystemPrompt } from "./prompt/build-system-prompt.ts";
+import { buildCodexSystemPrompt, extractPiPromptSkills, type PromptSkill } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 
 interface AdapterState {
 	enabled: boolean;
 	previousToolNames?: string[];
+	promptSkills: PromptSkill[];
 }
 
 function getCommandArg(args: unknown): string | undefined {
@@ -23,7 +24,7 @@ function getCommandArg(args: unknown): string | undefined {
 
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false };
+	const state: AdapterState = { enabled: false, promptSkills: [] };
 	const sessions = createExecSessionManager();
 
 	registerApplyPatchTool(pi);
@@ -58,15 +59,17 @@ export default function codexConversion(pi: ExtensionAPI) {
 		sessions.shutdown();
 	});
 
-	pi.on("before_agent_start", async (_event, ctx) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		if (!isCodexLikeContext(ctx)) {
 			return undefined;
 		}
-		return { systemPrompt: buildCodexSystemPrompt(ctx.cwd) };
+		return { systemPrompt: buildCodexSystemPrompt(event.systemPrompt, { skills: state.promptSkills }) };
 	});
 }
 
 function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
+	state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
+
 	registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
 
 	if (isCodexLikeContext(ctx)) {
