@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "description": "Codex-oriented tool and prompt adapter for pi coding agent",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IgorWarzocha/pi-codex-conversion.git"
+  },
+  "homepage": "https://github.com/IgorWarzocha/pi-codex-conversion#readme",
+  "bugs": {
+    "url": "https://github.com/IgorWarzocha/pi-codex-conversion/issues"
+  },
   "keywords": [
     "pi-package",
     "pi",
@@ -13,6 +21,10 @@
     "apply-patch"
   ],
   "license": "MIT",
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "pi": {
     "extensions": [
       "./src/index.ts"
@@ -21,6 +33,7 @@
   "files": [
     "src/**/*.ts",
     "src/**/*.md",
+    "available-tools.png",
     "README.md",
     "LICENSE"
   ],
