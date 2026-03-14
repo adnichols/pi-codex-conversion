@@ -4,8 +4,10 @@ import { registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { isCodexLikeContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
+import { createExecSessionManager } from "./tools/exec-session-manager.ts";
 import { buildCodexSystemPrompt } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool } from "./tools/view-image-tool.ts";
+import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 
 interface AdapterState {
 	enabled: boolean;
@@ -13,19 +15,25 @@ interface AdapterState {
 }
 
 function getCommandArg(args: unknown): string | undefined {
-	if (!args || typeof args !== "object" || !("command" in args) || typeof args.command !== "string") {
+	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
 		return undefined;
 	}
-	return args.command;
+	return args.cmd;
 }
 
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false };
+	const sessions = createExecSessionManager();
 
 	registerApplyPatchTool(pi);
-	registerExecCommandTool(pi, tracker);
+	registerExecCommandTool(pi, tracker, sessions);
+	registerWriteStdinTool(pi, sessions);
 	registerViewImageTool(pi);
+
+	sessions.onSessionExit((_sessionId, command) => {
+		tracker.recordCommandFinished(command);
+	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		syncAdapter(pi, ctx, state);
@@ -45,6 +53,10 @@ export default function codexConversion(pi: ExtensionAPI) {
 	pi.on("tool_execution_end", async (event) => {
 		if (event.toolName !== "exec_command") return;
 		tracker.recordEnd(event.toolCallId);
+	});
+
+	pi.on("session_shutdown", async () => {
+		sessions.shutdown();
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {

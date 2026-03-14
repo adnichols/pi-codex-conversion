@@ -5,20 +5,16 @@ import { executePatch } from "../patch/core.ts";
 import type { ExecutePatchResult } from "../patch/types.ts";
 
 const APPLY_PATCH_PARAMETERS = Type.Object({
-	patch: Type.String({
+	input: Type.String({
 		description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections.",
 	}),
 });
 
-interface ApplyPatchParams {
-	patch: string;
-}
-
-function parseApplyPatchParams(params: unknown): ApplyPatchParams {
-	if (!params || typeof params !== "object" || !("patch" in params) || typeof params.patch !== "string") {
-		throw new Error("apply_patch requires a string 'patch' parameter");
+function parseApplyPatchParams(params: unknown): { patchText: string } {
+	if (!params || typeof params !== "object" || !("input" in params) || typeof params.input !== "string") {
+		throw new Error("apply_patch requires a string 'input' parameter");
 	}
-	return { patch: params.patch };
+	return { patchText: params.input };
 }
 
 function isExecutePatchResult(details: unknown): details is ExecutePatchResult {
@@ -31,7 +27,7 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "apply_patch",
 		label: "apply_patch",
-		description: "Use `apply_patch` to edit files. Send the full patch in `patch`.",
+		description: "Use `apply_patch` to edit files. Send the full patch in `input`.",
 		promptSnippet: "Edit files with a patch.",
 		promptGuidelines: ["Prefer apply_patch for focused textual edits instead of rewriting whole files."],
 		parameters: APPLY_PATCH_PARAMETERS,
@@ -41,7 +37,7 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 			}
 
 			const typedParams = parseApplyPatchParams(params);
-			const result = executePatch({ cwd: ctx.cwd, patchText: typedParams.patch });
+			const result = executePatch({ cwd: ctx.cwd, patchText: typedParams.patchText });
 			const summary = [
 				"Applied patch successfully.",
 				`Changed files: ${result.changedFiles.length}`,

@@ -7,18 +7,24 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const originalRead = createReadTool(process.cwd());
 
 const VIEW_IMAGE_PARAMETERS = Type.Object({
-	path: Type.String({ description: "Path to the local image file to inspect" }),
+	path: Type.String({ description: "Local filesystem path to an image file" }),
+	detail: Type.Optional(Type.String({ description: "Optional detail override. The only supported value is `original`." })),
 });
 
 interface ViewImageParams {
 	path: string;
+	detail?: string;
 }
 
 function parseViewImageParams(params: unknown): ViewImageParams {
 	if (!params || typeof params !== "object" || !("path" in params) || typeof params.path !== "string") {
 		throw new Error("view_image requires a string 'path' parameter");
 	}
-	return { path: params.path };
+	const detail = "detail" in params && typeof params.detail === "string" ? params.detail : undefined;
+	if (detail !== undefined && detail !== "original") {
+		throw new Error("view_image.detail only supports `original`");
+	}
+	return { path: params.path, detail };
 }
 
 export function registerViewImageTool(pi: ExtensionAPI): void {
