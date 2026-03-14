@@ -15,3 +15,10 @@ test("restoreTools restores previous tools and keeps custom tools added while ad
 		["read", "bash", "edit", "write", "parallel", "custom_search"],
 	);
 });
+
+test("restoreTools strips adapter tools from mixed startup state while keeping unrelated tools", () => {
+	assert.deepEqual(
+		restoreTools(["read", "bash", "edit", "write"], ["read", "bash", "edit", "write", "apply_patch", "exec_command", "write_stdin", "parallel"]),
+		["read", "bash", "edit", "write", "parallel"],
+	);
+});

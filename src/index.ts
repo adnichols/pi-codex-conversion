@@ -99,9 +99,12 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 }
 
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
+	const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
+	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools());
+	if (state.enabled || hasAdapterTools(pi.getActiveTools())) {
+		pi.setActiveTools(restoredTools);
+	}
 	if (state.enabled) {
-		const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
-		pi.setActiveTools(restoreTools(previousToolNames, pi.getActiveTools()));
 		state.enabled = false;
 	}
 	setStatus(ctx, false);
@@ -132,4 +135,8 @@ export function restoreTools(previousTools: string[], activeTools: string[]): st
 		}
 	}
 	return restored;
+}
+
+function hasAdapterTools(activeTools: string[]): boolean {
+	return activeTools.some((toolName) => ADAPTER_TOOL_NAMES.includes(toolName));
 }

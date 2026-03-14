@@ -14,7 +14,8 @@ export function isCodexLikeModel(model: Partial<CodexLikeModelDescriptor> | null
 	const provider = (model.provider ?? "").toLowerCase();
 	const api = (model.api ?? "").toLowerCase();
 	const id = (model.id ?? "").toLowerCase();
-	return provider.includes("codex") || api.includes("codex") || id.includes("codex") || (provider.includes("openai") && id.includes("gpt"));
+	const isCopilotGpt = (provider.includes("copilot") || api.includes("copilot")) && id.includes("gpt");
+	return provider.includes("codex") || api.includes("codex") || id.includes("codex") || (provider.includes("openai") && id.includes("gpt")) || isCopilotGpt;
 }
 
 export function isCodexLikeContext(ctx: ExtensionContext): boolean {
