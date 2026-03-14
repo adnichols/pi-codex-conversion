@@ -1,8 +1,8 @@
-import { parseShellPart, nextCwd } from "./shell-parse.ts";
-import { splitOnConnectors, normalizeTokens, shellSplit } from "./shell-tokenize.ts";
-import type { CommandSummary, ShellAction } from "./shell-summary-types.ts";
+import { parseShellPart, nextCwd } from "./parse.ts";
+import { splitOnConnectors, normalizeTokens, shellSplit } from "./tokenize.ts";
+import type { CommandSummary, ShellAction } from "./types.ts";
 
-export type { CommandSummary, ShellAction } from "./shell-summary-types.ts";
+export type { CommandSummary, ShellAction } from "./types.ts";
 
 // The adapter only masks commands when every parsed segment still looks like
 // repository exploration. The moment we see an actual side-effectful run, we

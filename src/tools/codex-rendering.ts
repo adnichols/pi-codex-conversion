@@ -1,4 +1,4 @@
-import { summarizeShellCommand, type ShellAction } from "./codex-shell-summary.ts";
+import { summarizeShellCommand, type ShellAction } from "../shell/summary.ts";
 import type { ExecCommandStatus } from "./exec-command-state.ts";
 
 export interface RenderTheme {

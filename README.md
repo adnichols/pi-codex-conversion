@@ -1,11 +1,11 @@
 # pi-codex-conversion
 
-Codex-compatible adapter for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+Codex-oriented adapter for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
-This package replaces Pi's default Codex/GPT experience with a narrower Codex-style surface:
+This package replaces Pi's default Codex/GPT experience with a narrower Codex-like surface:
 
-- swaps Pi tools to `exec_command`, `apply_patch`, `write`, and `view_image`
-- replaces the default system prompt with `system-prompt.md`
+- swaps active tools to `exec_command`, `apply_patch`, and `view_image`
+- replaces the default system prompt with a compact prompt built from `src/prompt/system-prompt.md`
 - renders read-like shell commands as compact `Exploring` / `Explored` summaries
 
 ## Active tools in adapter mode
@@ -13,29 +13,24 @@ This package replaces Pi's default Codex/GPT experience with a narrower Codex-st
 When the adapter is active, the LLM sees these tools:
 
 - `exec_command` — wraps Pi's native `bash`
-- `apply_patch` — Codex-style patch tool
-- `write` — Pi's native write tool
+- `apply_patch` — patch tool
 - `view_image` — image-only wrapper around Pi's native `read`
 
 Notably:
 
-- there is **no general local text-file read tool** in adapter mode
+- there is **no** dedicated `read`, `edit`, or `write` tool in adapter mode
 - local text-file inspection should happen through `exec_command`
-- Pi's native `edit` tool is not exposed in adapter mode; use `apply_patch` or `write`
+- file creation and edits should default to `apply_patch`
 
-## Quick map
+## Layout
 
-- `index.ts` — extension entrypoint, model gating, tool-set swapping, prompt replacement
-- `codex-model.ts` — conservative Codex/GPT model detection
-- `exec-command-tool.ts` — `exec_command` wrapper around Pi `bash`
-- `view-image-tool.ts` — image-only view tool wrapper
-- `codex-rendering.ts` — compact `Exploring` / `Explored` call rendering
-- `codex-shell-summary.ts` — shell exploration classification entrypoint
-- `shell-tokenize.ts` / `shell-parse.ts` — shell tokenization and command-shape heuristics
-- `apply-patch.ts` — tool registration for `apply_patch`
-- `apply-patch-core.ts` / `apply-patch-parser.ts` / `apply-patch-paths.ts` / `apply-patch-types.ts` — patch parsing and execution lanes
-- `system-prompt.md` — reviewable replacement system prompt
-- `tests/*.test.ts` — deterministic hardening tests
+- `src/index.ts` — extension entrypoint, model gating, tool-set swapping, prompt replacement
+- `src/adapter/` — model detection and active-tool constants
+- `src/tools/` — Pi tool wrappers and execution rendering
+- `src/shell/` — shell tokenization, parsing, and exploration summaries
+- `src/patch/` — patch parsing, path policy, and execution
+- `src/prompt/` — compact prompt template and runtime builder
+- `tests/` — deterministic unit tests
 
 ## Checks
 

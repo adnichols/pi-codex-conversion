@@ -1,15 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { registerApplyPatchTool } from "./apply-patch.ts";
-import { isCodexLikeContext } from "./codex-model.ts";
-import { createExecCommandTracker } from "./exec-command-state.ts";
-import { registerExecCommandTool } from "./exec-command-tool.ts";
-import { buildCodexSystemPrompt } from "./system-prompt.ts";
-import { registerViewImageTool } from "./view-image-tool.ts";
-
-const STATUS_KEY = "codex-adapter";
-const STATUS_TEXT = "\u001b[38;2;0;76;255mCodex adapter\u001b[0m";
-const DEFAULT_TOOL_NAMES = ["read", "bash", "edit", "write"];
-const ADAPTER_TOOL_NAMES = ["exec_command", "apply_patch", "write", "view_image"];
+import { ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT } from "./adapter/tool-set.ts";
+import { registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
+import { isCodexLikeContext } from "./adapter/codex-model.ts";
+import { createExecCommandTracker } from "./tools/exec-command-state.ts";
+import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
+import { buildCodexSystemPrompt } from "./prompt/build-system-prompt.ts";
+import { registerViewImageTool } from "./tools/view-image-tool.ts";
 
 interface AdapterState {
 	enabled: boolean;

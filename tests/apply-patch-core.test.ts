@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { executePatch } from "../apply-patch-core.ts";
+import { executePatch } from "../src/patch/core.ts";
 
 test("executePatch updates, adds, and moves files inside cwd", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));

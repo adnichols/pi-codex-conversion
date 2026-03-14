@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isCodexLikeModel } from "../codex-model.ts";
+import { isCodexLikeModel } from "../src/adapter/codex-model.ts";
 
 test("detects codex provider and model ids", () => {
 	assert.equal(isCodexLikeModel({ provider: "openai-codex", api: "responses", id: "codex-mini-latest" }), true);

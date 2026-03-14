@@ -1,5 +1,5 @@
-import type { ShellAction } from "./shell-summary-types.ts";
-import { isAbsoluteLike, joinPaths, shortDisplayPath } from "./shell-tokenize.ts";
+import type { ShellAction } from "./types.ts";
+import { isAbsoluteLike, joinPaths, shortDisplayPath } from "./tokenize.ts";
 
 export function parseShellPart(tokens: string[], cwd?: string): ShellAction | null {
 	if (tokens.length === 0) return null;

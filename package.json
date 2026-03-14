@@ -1,7 +1,7 @@
 {
   "name": "pi-codex-conversion",
   "version": "1.0.0",
-  "description": "Codex-compatible tool and prompt adapter for pi coding agent",
+  "description": "Codex-oriented tool and prompt adapter for pi coding agent",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -15,12 +15,12 @@
   "license": "MIT",
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./src/index.ts"
     ]
   },
   "files": [
-    "*.ts",
-    "system-prompt.md",
+    "src/**/*.ts",
+    "src/**/*.md",
     "README.md",
     "LICENSE"
   ],

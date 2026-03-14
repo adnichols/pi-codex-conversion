@@ -1,5 +1,5 @@
-import { normalizePatchPath } from "./apply-patch-paths.ts";
-import { DiffError, type Chunk, type ParseMode, type ParserState, type Patch, type PatchAction } from "./apply-patch-types.ts";
+import { normalizePatchPath } from "./paths.ts";
+import { DiffError, type Chunk, type ParseMode, type ParserState, type Patch, type PatchAction } from "./types.ts";
 
 function parserIsDone({ state, prefixes }: { state: ParserState; prefixes?: string[] }): boolean {
 	if (state.index >= state.lines.length) {

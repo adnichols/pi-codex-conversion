@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { DiffError } from "./apply-patch-types.ts";
+import { DiffError } from "./types.ts";
 
 export function normalizePatchPath({ path }: { path: string }): string {
 	const trimmed = path.trim();

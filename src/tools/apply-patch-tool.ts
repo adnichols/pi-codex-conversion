@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { executePatch } from "./apply-patch-core.ts";
-import type { ExecutePatchResult } from "./apply-patch-types.ts";
+import { executePatch } from "../patch/core.ts";
+import type { ExecutePatchResult } from "../patch/types.ts";
 
 const APPLY_PATCH_PARAMETERS = Type.Object({
 	patch: Type.String({
@@ -25,7 +25,7 @@ function isExecutePatchResult(details: unknown): details is ExecutePatchResult {
 	return typeof details === "object" && details !== null;
 }
 
-export type { ExecutePatchResult } from "./apply-patch-types.ts";
+export type { ExecutePatchResult } from "../patch/types.ts";
 
 export function registerApplyPatchTool(pi: ExtensionAPI): void {
 	pi.registerTool({

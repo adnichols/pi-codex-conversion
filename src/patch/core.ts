@@ -1,8 +1,8 @@
 import { dirname } from "node:path";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { identifyFilesNeeded, parsePatchDocument } from "./apply-patch-parser.ts";
-import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./apply-patch-paths.ts";
-import { DiffError, type Commit, type ExecutePatchResult, type Patch, type PatchAction } from "./apply-patch-types.ts";
+import { identifyFilesNeeded, parsePatchDocument } from "./parser.ts";
+import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
+import { DiffError, type Commit, type ExecutePatchResult, type Patch, type PatchAction } from "./types.ts";
 
 function getUpdatedFile({ text, action, path }: { text: string; action: PatchAction; path: string }): string {
 	if (action.type !== "update") {

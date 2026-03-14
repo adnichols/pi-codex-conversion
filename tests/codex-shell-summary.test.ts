@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { summarizeShellCommand } from "../codex-shell-summary.ts";
+import { summarizeShellCommand } from "../src/shell/summary.ts";
 
 test("classifies simple file reads as explored reads", () => {
 	const summary = summarizeShellCommand("cat README.md");
