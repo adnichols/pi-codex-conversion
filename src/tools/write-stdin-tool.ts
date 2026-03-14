@@ -2,12 +2,13 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExecSessionManager, UnifiedExecResult } from "./exec-session-manager.ts";
+import { formatUnifiedExecResult } from "./unified-exec-format.ts";
 
 const WRITE_STDIN_PARAMETERS = Type.Object({
-	session_id: Type.Number({ description: "Identifier of the running exec session." }),
+	session_id: Type.Number({ description: "Identifier of the running unified exec session." }),
 	chars: Type.Optional(Type.String({ description: "Bytes to write to stdin. May be empty to poll." })),
-	yield_time_ms: Type.Optional(Type.Number({ description: "How long to wait in milliseconds for more output." })),
-	max_output_tokens: Type.Optional(Type.Number({ description: "Approximate maximum output tokens to return." })),
+	yield_time_ms: Type.Optional(Type.Number({ description: "How long to wait (in milliseconds) for output before yielding." })),
+	max_output_tokens: Type.Optional(Type.Number({ description: "Maximum number of tokens to return. Excess output will be truncated." })),
 });
 
 interface WriteStdinParams {
@@ -36,14 +37,21 @@ export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionMa
 	pi.registerTool({
 		name: "write_stdin",
 		label: "write_stdin",
-		description: "Writes characters to an existing exec session and returns recent output.",
+		description: "Writes characters to an existing unified exec session and returns recent output.",
 		promptSnippet: "Write to an exec session.",
 		parameters: WRITE_STDIN_PARAMETERS,
 		async execute(_toolCallId, params) {
 			const typed = parseWriteStdinParams(params);
-			const result = await sessions.write(typed);
+			const command = sessions.getSessionCommand(typed.session_id);
+			let result: UnifiedExecResult;
+			try {
+				result = await sessions.write(typed);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				throw new Error(`write_stdin failed: ${message}`);
+			}
 			return {
-				content: [{ type: "text", text: result.output || "(no output)" }],
+				content: [{ type: "text", text: formatUnifiedExecResult(result, command) }],
 				details: result,
 			};
 		},

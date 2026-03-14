@@ -4,15 +4,20 @@ import { Text } from "@mariozechner/pi-tui";
 import { renderExecCommandCall } from "./codex-rendering.ts";
 import type { ExecCommandTracker } from "./exec-command-state.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./exec-session-manager.ts";
+import { formatUnifiedExecResult } from "./unified-exec-format.ts";
 
 const EXEC_COMMAND_PARAMETERS = Type.Object({
 	cmd: Type.String({ description: "Shell command to execute." }),
 	workdir: Type.Optional(Type.String({ description: "Optional working directory; defaults to the current turn cwd." })),
 	shell: Type.Optional(Type.String({ description: "Optional shell binary; defaults to the user's shell." })),
-	tty: Type.Optional(Type.Boolean({ description: "Whether to request a TTY." })),
+	tty: Type.Optional(
+		Type.Boolean({
+			description: "Whether to allocate a TTY for the command. Defaults to false (plain pipes); set to true to open a PTY and access TTY process.",
+		}),
+	),
 	yield_time_ms: Type.Optional(Type.Number({ description: "How long to wait in milliseconds for output before yielding." })),
-	max_output_tokens: Type.Optional(Type.Number({ description: "Approximate maximum output tokens to return." })),
-	login: Type.Optional(Type.Boolean({ description: "Whether to run the shell with login semantics. Defaults to true." })),
+	max_output_tokens: Type.Optional(Type.Number({ description: "Maximum number of tokens to return. Excess output will be truncated." })),
+	login: Type.Optional(Type.Boolean({ description: "Whether to run the shell with -l/-i semantics. Defaults to true." })),
 });
 
 interface ExecCommandParams {
@@ -55,21 +60,25 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 	pi.registerTool({
 		name: "exec_command",
 		label: "exec_command",
-		description: "Runs a command, returning output or a session ID for ongoing interaction.",
+		description: "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
 		promptSnippet: "Run a command.",
 		promptGuidelines: [
 			"Use exec_command for search, listing files, and local text-file reads.",
 			"Prefer rg or rg --files when possible.",
+			"Keep tty disabled unless the command truly needs interactive terminal behavior.",
 		],
 		parameters: EXEC_COMMAND_PARAMETERS,
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (signal?.aborted) {
+				throw new Error("exec_command aborted");
+			}
 			const typedParams = parseExecCommandParams(params);
-			const result = await sessions.exec(typedParams, ctx.cwd);
+			const result = await sessions.exec(typedParams, ctx.cwd, signal);
 			if (result.session_id !== undefined) {
 				tracker.recordPersistentSession(typedParams.cmd);
 			}
 			return {
-				content: [{ type: "text", text: result.output || "(no output)" }],
+				content: [{ type: "text", text: formatUnifiedExecResult(result, typedParams.cmd) }],
 				details: result,
 			};
 		},

@@ -1,15 +1,23 @@
-import { dirname } from "node:path";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { identifyFilesNeeded, parsePatchDocument } from "./parser.ts";
+import { dirname } from "node:path";
+import { parsePatchActions, parseUpdateFile } from "./parser.ts";
 import { openFileAtPath, pathExists, removeFileAtPath, resolvePatchPath, writeFileAtPath } from "./paths.ts";
-import { DiffError, type Commit, type ExecutePatchResult, type Patch, type PatchAction } from "./types.ts";
+import { DiffError, type ExecutePatchResult, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
+
+function splitFileLines(text: string): string[] {
+	const lines = text.split("\n");
+	if (lines.at(-1) === "") {
+		lines.pop();
+	}
+	return lines;
+}
 
 function getUpdatedFile({ text, action, path }: { text: string; action: PatchAction; path: string }): string {
 	if (action.type !== "update") {
 		throw new DiffError(`Invalid action type for update: ${action.type}`);
 	}
 
-	const origLines = text.split("\n");
+	const origLines = splitFileLines(text);
 	const destLines: string[] = [];
 	let origIndex = 0;
 	let destIndex = 0;
@@ -52,123 +60,154 @@ function getUpdatedFile({ text, action, path }: { text: string; action: PatchAct
 		throw new DiffError(`Unexpected final dest_index for ${path}`);
 	}
 
-	return destLines.join("\n");
+	if (destLines.length === 0) {
+		return "";
+	}
+
+	return `${destLines.join("\n")}\n`;
 }
 
-function patchToCommit({ patch, originalFiles }: { patch: Patch; originalFiles: Record<string, string> }): Commit {
-	const commit: Commit = { changes: {} };
+function resolveUpdateAction({ path, text, lines }: { path: string; text: string; lines: string[] }): { action: PatchAction; fuzz: number } {
+	const state: ParserState = {
+		lines,
+		index: 0,
+		fuzz: 0,
+	};
+	const action = parseUpdateFile({ state, text, path });
+	if (action.chunks.length === 0) {
+		throw new DiffError(`Invalid patch hunk on line 2: Update file hunk for path '${path}' is empty`);
+	}
+	return { action, fuzz: state.fuzz };
+}
 
-	for (const [path, action] of Object.entries(patch.actions)) {
-		if (action.type === "delete") {
-			commit.changes[path] = {
-				type: "delete",
-				oldContent: originalFiles[path],
-			};
-			continue;
+function applyMove({
+	cwd,
+	path,
+	movePath,
+	content,
+	changedFiles,
+	createdFiles,
+	deletedFiles,
+	movedFiles,
+}: {
+	cwd: string;
+	path: string;
+	movePath: string;
+	content: string;
+	changedFiles: Set<string>;
+	createdFiles: Set<string>;
+	deletedFiles: Set<string>;
+	movedFiles: Set<string>;
+}): void {
+	const fromAbsolutePath = resolvePatchPath({ cwd, patchPath: path });
+	const toAbsolutePath = resolvePatchPath({ cwd, patchPath: movePath });
+	const destinationExisted = pathExists({ cwd, path: movePath });
+
+	mkdirSync(dirname(toAbsolutePath), { recursive: true });
+	writeFileSync(toAbsolutePath, content, "utf8");
+	if (fromAbsolutePath !== toAbsolutePath) {
+		unlinkSync(fromAbsolutePath);
+	}
+
+	changedFiles.add(path);
+	changedFiles.add(movePath);
+	movedFiles.add(`${path} -> ${movePath}`);
+	if (!destinationExisted) {
+		createdFiles.add(movePath);
+	}
+	if (fromAbsolutePath !== toAbsolutePath) {
+		deletedFiles.add(path);
+	}
+}
+
+function applyAction({
+	cwd,
+	action,
+	changedFiles,
+	createdFiles,
+	deletedFiles,
+	movedFiles,
+}: {
+	cwd: string;
+	action: ParsedPatchAction;
+	changedFiles: Set<string>;
+	createdFiles: Set<string>;
+	deletedFiles: Set<string>;
+	movedFiles: Set<string>;
+}): number {
+	if (action.type === "delete") {
+		removeFileAtPath({ cwd, path: action.path });
+		changedFiles.add(action.path);
+		deletedFiles.add(action.path);
+		return 0;
+	}
+
+	if (action.type === "add") {
+		const { created } = writeFileAtPath({
+			cwd,
+			path: action.path,
+			content: action.newFile ?? "",
+		});
+		changedFiles.add(action.path);
+		if (created) {
+			createdFiles.add(action.path);
 		}
+		return 0;
+	}
 
-		if (action.type === "add") {
-			commit.changes[path] = {
-				type: "add",
-				newContent: action.newFile ?? "",
-			};
-			continue;
-		}
+	if (!action.lines) {
+		throw new DiffError(`Update File Error: Missing patch lines for ${action.path}`);
+	}
 
-		const newContent = getUpdatedFile({ text: originalFiles[path], action, path });
-		commit.changes[path] = {
-			type: "update",
-			oldContent: originalFiles[path],
-			newContent,
+	const originalText = openFileAtPath({ cwd, path: action.path });
+	const { action: resolvedAction, fuzz } = resolveUpdateAction({
+		path: action.path,
+		text: originalText,
+		lines: action.lines,
+	});
+	resolvedAction.movePath = action.movePath;
+	const newContent = getUpdatedFile({ text: originalText, action: resolvedAction, path: action.path });
+
+	if (action.movePath) {
+		applyMove({
+			cwd,
+			path: action.path,
 			movePath: action.movePath,
-		};
+			content: newContent,
+			changedFiles,
+			createdFiles,
+			deletedFiles,
+			movedFiles,
+		});
+		return fuzz;
 	}
 
-	return commit;
+	writeFileAtPath({ cwd, path: action.path, content: newContent });
+	changedFiles.add(action.path);
+	return fuzz;
 }
 
-function loadFiles({ paths, cwd }: { paths: string[]; cwd: string }): Record<string, string> {
-	const files: Record<string, string> = {};
-	for (const path of paths) {
-		files[path] = openFileAtPath({ cwd, path });
-	}
-	return files;
-}
-
-// executePatch is kept pure with respect to patch parsing: all I/O is isolated
-// to the final commit application phase so tests can exercise failure paths in
-// small deterministic fixtures.
 export function executePatch({ cwd, patchText }: { cwd: string; patchText: string }): ExecutePatchResult {
 	if (!patchText.startsWith("*** Begin Patch")) {
 		throw new DiffError("Patch must start with '*** Begin Patch'");
 	}
 
-	const requiredFiles = identifyFilesNeeded({ patchText });
-	const originalFiles = loadFiles({ paths: requiredFiles, cwd });
-	const { patch, fuzz } = parsePatchDocument({ text: patchText, originalFiles });
-	const commit = patchToCommit({ patch, originalFiles });
-
+	const actions = parsePatchActions({ text: patchText });
 	const changedFiles = new Set<string>();
 	const createdFiles = new Set<string>();
 	const deletedFiles = new Set<string>();
 	const movedFiles = new Set<string>();
+	let fuzz = 0;
 
-	for (const [path, change] of Object.entries(commit.changes)) {
-		if (change.type === "delete") {
-			removeFileAtPath({ cwd, path });
-			changedFiles.add(path);
-			deletedFiles.add(path);
-			continue;
-		}
-
-		if (change.type === "add") {
-			const { created } = writeFileAtPath({
-				cwd,
-				path,
-				content: change.newContent ?? "",
-			});
-			changedFiles.add(path);
-			if (created) {
-				createdFiles.add(path);
-			}
-			continue;
-		}
-
-		if (change.newContent === undefined) {
-			throw new DiffError(`Update File Error: Missing new content for ${path}`);
-		}
-
-		if (change.movePath) {
-			const fromAbsolutePath = resolvePatchPath({ cwd, patchPath: path });
-			const toAbsolutePath = resolvePatchPath({ cwd, patchPath: change.movePath });
-			const destinationExisted = pathExists({ cwd, path: change.movePath });
-			if (destinationExisted && fromAbsolutePath !== toAbsolutePath) {
-				throw new DiffError(`Update File Error: Destination already exists: ${change.movePath}`);
-			}
-
-			mkdirSync(dirname(toAbsolutePath), { recursive: true });
-			writeFileSync(toAbsolutePath, change.newContent, "utf8");
-			if (fromAbsolutePath !== toAbsolutePath) {
-				if (!pathExists({ cwd, path })) {
-					throw new DiffError(`Update File Error: Missing source file: ${path}`);
-				}
-				unlinkSync(fromAbsolutePath);
-			}
-
-			changedFiles.add(path);
-			changedFiles.add(change.movePath);
-			movedFiles.add(`${path} -> ${change.movePath}`);
-			if (!destinationExisted) {
-				createdFiles.add(change.movePath);
-			}
-			if (fromAbsolutePath !== toAbsolutePath) {
-				deletedFiles.add(path);
-			}
-			continue;
-		}
-
-		writeFileAtPath({ cwd, path, content: change.newContent });
-		changedFiles.add(path);
+	for (const action of actions) {
+		fuzz += applyAction({
+			cwd,
+			action,
+			changedFiles,
+			createdFiles,
+			deletedFiles,
+			movedFiles,
+		});
 	}
 
 	return {

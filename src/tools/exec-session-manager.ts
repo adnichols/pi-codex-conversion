@@ -1,6 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { resolve } from "node:path";
+import type { Readable } from "node:stream";
+import * as pty from "node-pty";
 
 export interface UnifiedExecResult {
 	chunk_id: string;
@@ -28,26 +30,42 @@ export interface WriteStdinInput {
 	max_output_tokens?: number;
 }
 
-interface ExecSession {
+interface BaseExecSession {
 	id: number;
 	command: string;
-	child: ChildProcessWithoutNullStreams;
 	buffer: string;
 	cursor: number;
 	exitCode: number | null | undefined;
 	listeners: Set<() => void>;
+	interactive: boolean;
 }
 
+interface PipeExecSession extends BaseExecSession {
+	kind: "pipe";
+	child: ChildProcessByStdio<null, Readable, Readable>;
+}
+
+interface PtyExecSession extends BaseExecSession {
+	kind: "pty";
+	child: pty.IPty;
+}
+
+type ExecSession = PipeExecSession | PtyExecSession;
+
 export interface ExecSessionManager {
-	exec(input: ExecCommandInput, cwd: string): Promise<UnifiedExecResult>;
+	exec(input: ExecCommandInput, cwd: string, signal?: AbortSignal): Promise<UnifiedExecResult>;
 	write(input: WriteStdinInput): Promise<UnifiedExecResult>;
 	hasSession(sessionId: number): boolean;
+	getSessionCommand(sessionId: number): string | undefined;
 	onSessionExit(listener: (sessionId: number, command: string) => void): () => void;
 	shutdown(): void;
 }
 
-const DEFAULT_YIELD_TIME_MS = 1000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 4000;
+const DEFAULT_EXEC_YIELD_TIME_MS = 10_000;
+const DEFAULT_WRITE_YIELD_TIME_MS = 250;
+const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
+const MIN_YIELD_TIME_MS = 250;
+const MAX_YIELD_TIME_MS = 30_000;
 
 function resolveWorkdir(baseCwd: string, workdir?: string): string {
 	if (!workdir) return baseCwd;
@@ -58,8 +76,42 @@ function resolveShell(shell?: string): string {
 	return shell || process.env.SHELL || "/bin/bash";
 }
 
+function clampYieldTime(yieldTimeMs: number | undefined, fallback: number): number {
+	const value = yieldTimeMs ?? fallback;
+	return Math.min(MAX_YIELD_TIME_MS, Math.max(MIN_YIELD_TIME_MS, value));
+}
+
 function maxCharsForTokens(maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS): number {
 	return Math.max(256, maxOutputTokens * 4);
+}
+
+function stripTerminalControlSequences(text: string): string {
+	return text
+		.replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/g, "")
+		.replace(/\u001B[P_X^][\s\S]*?\u001B\\/g, "")
+		.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\u001B[@-_]/g, "");
+}
+
+function sanitizeBinaryOutput(text: string): string {
+	return Array.from(text)
+		.filter((char) => {
+			const code = char.codePointAt(0);
+			if (code === undefined) return false;
+			if (code === 0x09 || code === 0x0a || code === 0x0d) return true;
+			if (code <= 0x1f) return false;
+			if (code >= 0xfff9 && code <= 0xfffb) return false;
+			return true;
+		})
+		.join("");
+}
+
+function normalizeOutput(text: string): string {
+	return sanitizeBinaryOutput(stripTerminalControlSequences(text)).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function generateChunkId(): string {
+	return randomBytes(3).toString("hex");
 }
 
 function consumeOutput(session: ExecSession, maxOutputTokens?: number): { output: string; original_token_count?: number } {
@@ -81,6 +133,21 @@ function consumeOutput(session: ExecSession, maxOutputTokens?: number): { output
 	};
 }
 
+function registerAbortHandler(signal: AbortSignal | undefined, onAbort: () => void): () => void {
+	if (!signal) {
+		return () => {};
+	}
+
+	if (signal.aborted) {
+		onAbort();
+		return () => {};
+	}
+
+	const abortListener = () => onAbort();
+	signal.addEventListener("abort", abortListener, { once: true });
+	return () => signal.removeEventListener("abort", abortListener);
+}
+
 export function createExecSessionManager(): ExecSessionManager {
 	let nextSessionId = 1;
 	const sessions = new Map<number, ExecSession>();
@@ -99,7 +166,17 @@ export function createExecSessionManager(): ExecSessionManager {
 		notify(session);
 	}
 
-	function waitForActivity(session: ExecSession, yieldTimeMs = DEFAULT_YIELD_TIME_MS): Promise<number> {
+	function appendOutput(session: ExecSession, text: string): void {
+		if (text.length === 0) return;
+		session.buffer += normalizeOutput(text);
+		notify(session);
+	}
+
+	function waitForActivity(session: ExecSession, yieldTimeMs: number): Promise<number> {
+		if (session.buffer.length > session.cursor || session.exitCode !== undefined && session.exitCode !== null) {
+			return Promise.resolve(0);
+		}
+
 		const startedAt = Date.now();
 		return new Promise((resolvePromise) => {
 			const onWake = () => {
@@ -118,7 +195,7 @@ export function createExecSessionManager(): ExecSessionManager {
 	function makeResult(session: ExecSession, waitMs: number, maxOutputTokens?: number): UnifiedExecResult {
 		const consumed = consumeOutput(session, maxOutputTokens);
 		const result: UnifiedExecResult = {
-			chunk_id: randomUUID(),
+			chunk_id: generateChunkId(),
 			wall_time_seconds: waitMs / 1000,
 			output: consumed.output,
 		};
@@ -136,73 +213,137 @@ export function createExecSessionManager(): ExecSessionManager {
 		return result;
 	}
 
-		return {
-		exec: async (input, cwd) => {
+	function createPipeSession(input: ExecCommandInput, workdir: string, shell: string, signal?: AbortSignal): PipeExecSession {
+		const login = input.login ?? true;
+		const shellArgs = login ? ["-lc", input.cmd] : ["-c", input.cmd];
+		const child = spawn(shell, shellArgs, {
+			cwd: workdir,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: process.env,
+		});
+
+		const session: PipeExecSession = {
+			kind: "pipe",
+			id: nextSessionId++,
+			command: input.cmd,
+			child,
+			buffer: "",
+			cursor: 0,
+			exitCode: undefined,
+			listeners: new Set(),
+			interactive: false,
+		};
+
+		child.stdout.on("data", (data: Buffer) => {
+			appendOutput(session, data.toString("utf8"));
+		});
+		child.stderr.on("data", (data: Buffer) => {
+			appendOutput(session, data.toString("utf8"));
+		});
+		child.on("close", (code) => {
+			session.exitCode = code ?? 0;
+			finalizeSession(session);
+		});
+		child.on("error", (error) => {
+			appendOutput(session, `${error.message}\n`);
+			session.exitCode = 1;
+			finalizeSession(session);
+		});
+
+		registerAbortHandler(signal, () => {
+			if (session.exitCode === undefined) {
+				child.kill("SIGTERM");
+			}
+		});
+
+		return session;
+	}
+
+	function createPtySession(input: ExecCommandInput, workdir: string, shell: string, signal?: AbortSignal): PtyExecSession {
+		const login = input.login ?? true;
+		const shellArgs = login ? ["-lc", input.cmd] : ["-c", input.cmd];
+		const child = pty.spawn(shell, shellArgs, {
+			cwd: workdir,
+			env: process.env,
+			name: process.env.TERM || "xterm-256color",
+			cols: 80,
+			rows: 24,
+		});
+
+		const session: PtyExecSession = {
+			kind: "pty",
+			id: nextSessionId++,
+			command: input.cmd,
+			child,
+			buffer: "",
+			cursor: 0,
+			exitCode: undefined,
+			listeners: new Set(),
+			interactive: true,
+		};
+
+		child.onData((data) => {
+			appendOutput(session, data);
+		});
+		child.onExit(({ exitCode }) => {
+			session.exitCode = exitCode ?? 0;
+			finalizeSession(session);
+		});
+
+		registerAbortHandler(signal, () => {
+			if (session.exitCode === undefined) {
+				child.kill();
+			}
+		});
+
+		return session;
+	}
+
+	return {
+		exec: async (input, cwd, signal) => {
 			const shell = resolveShell(input.shell);
 			const workdir = resolveWorkdir(cwd, input.workdir);
-			const login = input.login ?? true;
-			const shellArgs = login ? ["-lc", input.cmd] : ["-c", input.cmd];
-			const child = spawn(shell, shellArgs, {
-				cwd: workdir,
-				stdio: ["pipe", "pipe", "pipe"],
-				env: process.env,
-			});
-			const session: ExecSession = {
-				id: nextSessionId++,
-				command: input.cmd,
-				child,
-				buffer: "",
-				cursor: 0,
-				exitCode: undefined,
-				listeners: new Set(),
-			};
+			const session = input.tty
+				? createPtySession(input, workdir, shell, signal)
+				: createPipeSession(input, workdir, shell, signal);
 			sessions.set(session.id, session);
 
-			child.stdout.on("data", (data: Buffer) => {
-				session.buffer += data.toString("utf8");
-				notify(session);
-			});
-			child.stderr.on("data", (data: Buffer) => {
-				session.buffer += data.toString("utf8");
-				notify(session);
-			});
-			child.on("close", (code) => {
-				session.exitCode = code ?? 0;
-				finalizeSession(session);
-			});
-			child.on("error", (error) => {
-				session.buffer += `${error.message}\n`;
-				session.exitCode = 1;
-				finalizeSession(session);
-			});
-
-			const waitedMs = await waitForActivity(session, input.yield_time_ms);
+			const waitedMs = await waitForActivity(session, clampYieldTime(input.yield_time_ms, DEFAULT_EXEC_YIELD_TIME_MS));
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
 		write: async (input) => {
 			const session = sessions.get(input.session_id);
 			if (!session) {
-				return {
-					chunk_id: randomUUID(),
-					wall_time_seconds: 0,
-					output: "Session not found",
-					exit_code: 1,
-				};
+				throw new Error(`Unknown process id ${input.session_id}`);
 			}
-			if (input.chars && session.exitCode === undefined) {
-				session.child.stdin.write(input.chars);
+			if (input.chars && input.chars.length > 0) {
+				if (!session.interactive) {
+					throw new Error("stdin is closed for this session; rerun exec_command with tty=true to keep stdin open");
+				}
+				if (session.kind === "pty") {
+					session.child.write(input.chars);
+				}
 			}
-			const waitedMs = session.exitCode === undefined ? await waitForActivity(session, input.yield_time_ms) : 0;
+			const waitedMs =
+				session.exitCode === undefined
+					? await waitForActivity(session, clampYieldTime(input.yield_time_ms, DEFAULT_WRITE_YIELD_TIME_MS))
+					: 0;
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
 		hasSession: (sessionId) => sessions.has(sessionId),
+		getSessionCommand: (sessionId) => sessions.get(sessionId)?.command,
 		onSessionExit: (listener) => {
 			exitListeners.add(listener);
 			return () => exitListeners.delete(listener);
 		},
 		shutdown: () => {
 			for (const session of sessions.values()) {
-				if (session.exitCode === undefined) {
+				if (session.exitCode !== undefined) {
+					continue;
+				}
+				if (session.kind === "pty") {
+					session.child.kill();
+				} else {
 					session.child.kill("SIGTERM");
 				}
 			}

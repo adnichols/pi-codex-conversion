@@ -1,5 +1,5 @@
 import { normalizePatchPath } from "./paths.ts";
-import { DiffError, type Chunk, type ParseMode, type ParserState, type Patch, type PatchAction } from "./types.ts";
+import { DiffError, type Chunk, type ParseMode, type ParsedPatchAction, type ParserState, type PatchAction } from "./types.ts";
 
 function parserIsDone({ state, prefixes }: { state: ParserState; prefixes?: string[] }): boolean {
 	if (state.index >= state.lines.length) {
@@ -38,6 +38,14 @@ function parserReadStr({
 		return text;
 	}
 	return "";
+}
+
+function splitFileLines(text: string): string[] {
+	const lines = text.split("\n");
+	if (lines.at(-1) === "") {
+		lines.pop();
+	}
+	return lines;
 }
 
 function linesEqual({ left, right }: { left: string[]; right: string[] }): boolean {
@@ -223,18 +231,18 @@ function parseAddFile({ state }: { state: ParserState }): PatchAction {
 
 	return {
 		type: "add",
-		newFile: lines.join("\n"),
+		newFile: lines.length === 0 ? "" : `${lines.join("\n")}\n`,
 		chunks: [],
 	};
 }
 
-function parseUpdateFile({ state, text }: { state: ParserState; text: string }): PatchAction {
+export function parseUpdateFile({ state, text, path }: { state: ParserState; text: string; path: string }): PatchAction {
 	const action: PatchAction = {
 		type: "update",
 		chunks: [],
 	};
 
-	const lines = text.split("\n");
+	const lines = splitFileLines(text);
 	let index = 0;
 
 	while (
@@ -292,10 +300,7 @@ function parseUpdateFile({ state, text }: { state: ParserState; text: string }):
 		});
 
 		if (newIndex === -1) {
-			if (eof) {
-				throw new DiffError(`Invalid EOF Context ${index}:\n${nextChunkText}`);
-			}
-			throw new DiffError(`Invalid Context ${index}:\n${nextChunkText}`);
+			throw new DiffError(`Failed to find expected lines in ${path}:\n${nextChunkText}`);
 		}
 
 		state.fuzz += fuzz;
@@ -315,86 +320,103 @@ function parseUpdateFile({ state, text }: { state: ParserState; text: string }):
 	return action;
 }
 
-export function parsePatchDocument({ text, originalFiles }: { text: string; originalFiles: Record<string, string> }): {
-	patch: Patch;
-	fuzz: number;
-} {
+const VALID_HUNK_HEADERS = [
+	"'*** Add File: {path}'",
+	"'*** Delete File: {path}'",
+	"'*** Update File: {path}'",
+].join(", ");
+
+export function parsePatchActions({ text }: { text: string }): ParsedPatchAction[] {
 	const lines = text.trim().split("\n");
 	if (lines.length < 2 || !lines[0].startsWith("*** Begin Patch") || lines[lines.length - 1] !== "*** End Patch") {
 		throw new DiffError("Invalid patch text");
 	}
 
-	const state: ParserState = {
-		currentFiles: originalFiles,
-		lines,
-		index: 1,
-		patch: { actions: {} },
-		fuzz: 0,
-	};
+	const actions: ParsedPatchAction[] = [];
+	const seenPaths = new Set<string>();
+	let index = 1;
 
-	while (!parserIsDone({ state, prefixes: ["*** End Patch"] })) {
-		const updatePath = normalizePatchPath({ path: parserReadStr({ state, prefix: "*** Update File: " }) });
-		if (updatePath) {
-			if (state.patch.actions[updatePath]) {
+	while (index < lines.length - 1) {
+		const line = lines[index];
+		const lineNumber = index + 1;
+
+		if (line.startsWith("*** Update File: ")) {
+			const updatePath = normalizePatchPath({ path: line.slice("*** Update File: ".length) });
+			if (seenPaths.has(updatePath)) {
 				throw new DiffError(`Update File Error: Duplicate Path: ${updatePath}`);
 			}
-			const moveToRaw = parserReadStr({ state, prefix: "*** Move to: " });
-			const moveTo = moveToRaw ? normalizePatchPath({ path: moveToRaw }) : undefined;
-			if (!(updatePath in state.currentFiles)) {
-				throw new DiffError(`Update File Error: Missing File: ${updatePath}`);
+			seenPaths.add(updatePath);
+			index += 1;
+			let movePath: string | undefined;
+			if (index < lines.length - 1 && lines[index].startsWith("*** Move to: ")) {
+				movePath = normalizePatchPath({ path: lines[index].slice("*** Move to: ".length) });
+				index += 1;
 			}
-
-			const action = parseUpdateFile({ state, text: state.currentFiles[updatePath] });
-			action.movePath = moveTo;
-			state.patch.actions[updatePath] = action;
+			const bodyStart = index;
+			while (
+				index < lines.length - 1 &&
+				!lines[index].startsWith("*** Update File: ") &&
+				!lines[index].startsWith("*** Delete File: ") &&
+				!lines[index].startsWith("*** Add File: ")
+			) {
+				index += 1;
+			}
+			const bodyLines = lines.slice(bodyStart, index);
+			if (bodyLines.length === 0) {
+				throw new DiffError(`Invalid patch hunk on line ${lineNumber}: Update file hunk for path '${updatePath}' is empty`);
+			}
+			actions.push({
+				type: "update",
+				path: updatePath,
+				movePath,
+				lines: bodyLines,
+			});
 			continue;
 		}
 
-		const deletePath = normalizePatchPath({ path: parserReadStr({ state, prefix: "*** Delete File: " }) });
-		if (deletePath) {
-			if (state.patch.actions[deletePath]) {
+		if (line.startsWith("*** Delete File: ")) {
+			const deletePath = normalizePatchPath({ path: line.slice("*** Delete File: ".length) });
+			if (seenPaths.has(deletePath)) {
 				throw new DiffError(`Delete File Error: Duplicate Path: ${deletePath}`);
 			}
-			if (!(deletePath in state.currentFiles)) {
-				throw new DiffError(`Delete File Error: Missing File: ${deletePath}`);
-			}
-			state.patch.actions[deletePath] = {
+			seenPaths.add(deletePath);
+			actions.push({
 				type: "delete",
-				chunks: [],
-			};
+				path: deletePath,
+			});
+			index += 1;
 			continue;
 		}
 
-		const addPath = normalizePatchPath({ path: parserReadStr({ state, prefix: "*** Add File: " }) });
-		if (addPath) {
-			if (state.patch.actions[addPath]) {
+		if (line.startsWith("*** Add File: ")) {
+			const addPath = normalizePatchPath({ path: line.slice("*** Add File: ".length) });
+			if (seenPaths.has(addPath)) {
 				throw new DiffError(`Add File Error: Duplicate Path: ${addPath}`);
 			}
-			state.patch.actions[addPath] = parseAddFile({ state });
+			seenPaths.add(addPath);
+			const state: ParserState = {
+				lines,
+				index: index + 1,
+				fuzz: 0,
+			};
+			const action = parseAddFile({ state });
+			actions.push({
+				type: "add",
+				path: addPath,
+				newFile: action.newFile,
+			});
+			index = state.index;
 			continue;
 		}
 
-		throw new DiffError(`Unknown Line: ${state.lines[state.index]}`);
+		throw new DiffError(
+			`Invalid patch hunk on line ${lineNumber}: '${line}' is not a valid hunk header. Valid hunk headers: ${VALID_HUNK_HEADERS}`,
+		);
 	}
 
-	if (!parserStartsWith({ state, prefix: "*** End Patch" })) {
-		throw new DiffError("Missing End Patch");
+	if (actions.length === 0) {
+		throw new DiffError("No files were modified.");
 	}
-	state.index += 1;
 
-	return { patch: state.patch, fuzz: state.fuzz };
-}
-
-export function identifyFilesNeeded({ patchText }: { patchText: string }): string[] {
-	const lines = patchText.trim().split("\n");
-	const files = new Set<string>();
-	for (const line of lines) {
-		if (line.startsWith("*** Update File: ")) {
-			files.add(normalizePatchPath({ path: line.slice("*** Update File: ".length) }));
-		}
-		if (line.startsWith("*** Delete File: ")) {
-			files.add(normalizePatchPath({ path: line.slice("*** Delete File: ".length) }));
-		}
-	}
-	return [...files];
+	return actions;
 }

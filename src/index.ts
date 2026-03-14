@@ -1,12 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT } from "./adapter/tool-set.ts";
+import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME } from "./adapter/tool-set.ts";
 import { registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { isCodexLikeContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
 import { createExecSessionManager } from "./tools/exec-session-manager.ts";
 import { buildCodexSystemPrompt } from "./prompt/build-system-prompt.ts";
-import { registerViewImageTool } from "./tools/view-image-tool.ts";
+import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 
 interface AdapterState {
@@ -29,7 +29,6 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerApplyPatchTool(pi);
 	registerExecCommandTool(pi, tracker, sessions);
 	registerWriteStdinTool(pi, sessions);
-	registerViewImageTool(pi);
 
 	sessions.onSessionExit((_sessionId, command) => {
 		tracker.recordCommandFinished(command);
@@ -68,6 +67,8 @@ export default function codexConversion(pi: ExtensionAPI) {
 }
 
 function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
+	registerViewImageTool(pi, { allowOriginalDetail: supportsOriginalImageDetail(ctx.model) });
+
 	if (isCodexLikeContext(ctx)) {
 		enableAdapter(pi, ctx, state);
 	} else {
@@ -76,13 +77,14 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 }
 
 function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
+	const toolNames = getAdapterToolNames(ctx);
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
 		// models restores the user's existing Pi tool configuration.
 		state.previousToolNames = pi.getActiveTools();
-		pi.setActiveTools(ADAPTER_TOOL_NAMES);
 		state.enabled = true;
 	}
+	pi.setActiveTools(toolNames);
 	setStatus(ctx, true);
 }
 
@@ -97,4 +99,11 @@ function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterS
 function setStatus(ctx: ExtensionContext, enabled: boolean): void {
 	if (!ctx.hasUI) return;
 	ctx.ui.setStatus(STATUS_KEY, enabled ? STATUS_TEXT : undefined);
+}
+
+function getAdapterToolNames(ctx: ExtensionContext): string[] {
+	if (Array.isArray(ctx.model?.input) && ctx.model.input.includes("image")) {
+		return [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME];
+	}
+	return [...CORE_ADAPTER_TOOL_NAMES];
 }

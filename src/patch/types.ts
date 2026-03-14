@@ -14,27 +14,18 @@ export interface PatchAction {
 	movePath?: string;
 }
 
-export interface Patch {
-	actions: Record<string, PatchAction>;
-}
-
-export interface ParserState {
-	currentFiles: Record<string, string>;
-	lines: string[];
-	index: number;
-	patch: Patch;
-	fuzz: number;
-}
-
-export interface FileChange {
+export interface ParsedPatchAction {
 	type: ActionType;
-	oldContent?: string;
-	newContent?: string;
+	path: string;
+	newFile?: string;
+	lines?: string[];
 	movePath?: string;
 }
 
-export interface Commit {
-	changes: Record<string, FileChange>;
+export interface ParserState {
+	lines: string[];
+	index: number;
+	fuzz: number;
 }
 
 export interface ExecutePatchResult {
