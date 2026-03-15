@@ -1,0 +1,123 @@
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { Box, Text } from "@mariozechner/pi-tui";
+import { isOpenAICodexModel } from "../adapter/codex-model.ts";
+import { renderWebSearchActivity } from "./codex-rendering.ts";
+
+export const WEB_SEARCH_UNSUPPORTED_MESSAGE = "web_search is only available with the openai-codex provider";
+const WEB_SEARCH_LOCAL_EXECUTION_MESSAGE =
+	"web_search is a native openai-codex provider tool and should not execute locally";
+export const WEB_SEARCH_ACTIVITY_MESSAGE_TYPE = "codex-web-search";
+
+const WEB_SEARCH_PARAMETERS = Type.Object({}, { additionalProperties: false });
+
+interface FunctionToolPayload {
+	type?: unknown;
+	name?: unknown;
+}
+
+interface ResponsesPayload {
+	tools?: unknown[];
+	[key: string]: unknown;
+}
+
+export interface WebSearchActivityDetails {
+	count: number;
+}
+
+export function supportsNativeWebSearch(model: ExtensionContext["model"]): boolean {
+	return isOpenAICodexModel(model);
+}
+
+function isWebSearchFunctionTool(tool: unknown): tool is FunctionToolPayload {
+	return !!tool && typeof tool === "object" && (tool as FunctionToolPayload).type === "function" && (tool as FunctionToolPayload).name === "web_search";
+}
+
+export function rewriteNativeWebSearchTool(payload: unknown, model: ExtensionContext["model"]): unknown {
+	if (!supportsNativeWebSearch(model) || !payload || typeof payload !== "object") {
+		return payload;
+	}
+
+	const tools = (payload as ResponsesPayload).tools;
+	if (!Array.isArray(tools)) {
+		return payload;
+	}
+
+	let rewritten = false;
+	const nextTools = tools.map((tool) => {
+		if (!isWebSearchFunctionTool(tool)) {
+			return tool;
+		}
+		rewritten = true;
+		// Match Codex's native tool shape rather than exposing a synthetic function tool.
+		return {
+			type: "web_search",
+			external_web_access: true,
+		};
+	});
+
+	if (!rewritten) {
+		return payload;
+	}
+
+	return {
+		...(payload as ResponsesPayload),
+		tools: nextTools,
+	};
+}
+
+export function payloadContainsWebSearchTool(payload: unknown): boolean {
+	if (!payload || typeof payload !== "object") {
+		return false;
+	}
+	const tools = (payload as ResponsesPayload).tools;
+	if (!Array.isArray(tools)) {
+		return false;
+	}
+	return tools.some(
+		(tool) =>
+			!!tool &&
+			typeof tool === "object" &&
+			(("type" in tool && (tool as { type?: unknown }).type === "web_search") || isWebSearchFunctionTool(tool)),
+	);
+}
+
+export function createWebSearchTool(): ToolDefinition<typeof WEB_SEARCH_PARAMETERS> {
+	return {
+		name: "web_search",
+		label: "web_search",
+		description: "Search the internet for sources related to the prompt.",
+		promptSnippet: "Search the internet for sources related to the prompt.",
+		parameters: WEB_SEARCH_PARAMETERS,
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			if (!supportsNativeWebSearch(ctx.model)) {
+				throw new Error(WEB_SEARCH_UNSUPPORTED_MESSAGE);
+			}
+			throw new Error(WEB_SEARCH_LOCAL_EXECUTION_MESSAGE);
+		},
+		renderCall(_args, theme) {
+			return new Text(`${theme.fg("toolTitle", theme.bold("web_search"))}`, 0, 0);
+		},
+		renderResult(result, { expanded }, theme) {
+			if (!expanded) {
+				return undefined;
+			}
+			const textBlock = result.content.find((item) => item.type === "text");
+			const text = textBlock?.type === "text" ? textBlock.text : "(no output)";
+			return new Text(theme.fg("dim", text), 0, 0);
+		},
+	};
+}
+
+export function registerWebSearchTool(pi: ExtensionAPI): void {
+	pi.registerTool(createWebSearchTool());
+}
+
+export function registerWebSearchMessageRenderer(pi: ExtensionAPI): void {
+	pi.registerMessageRenderer<WebSearchActivityDetails>(WEB_SEARCH_ACTIVITY_MESSAGE_TYPE, (message, { expanded }, theme) => {
+		const count = typeof message.details?.count === "number" ? message.details.count : 1;
+		const box = new Box(1, 1, (text) => theme.bg("toolSuccessBg", text));
+		box.addChild(new Text(renderWebSearchActivity(count, theme, expanded), 0, 0));
+		return box;
+	});
+}

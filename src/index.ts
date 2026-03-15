@@ -1,21 +1,30 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME } from "./adapter/tool-set.ts";
+import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
 import { registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
-import { isCodexLikeContext } from "./adapter/codex-model.ts";
+import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
 import { createExecSessionManager } from "./tools/exec-session-manager.ts";
 import { buildCodexSystemPrompt, extractPiPromptSkills, type PromptSkill } from "./prompt/build-system-prompt.ts";
 import { registerViewImageTool, supportsOriginalImageDetail } from "./tools/view-image-tool.ts";
+import {
+	WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
+	payloadContainsWebSearchTool,
+	registerWebSearchMessageRenderer,
+	registerWebSearchTool,
+	rewriteNativeWebSearchTool,
+	supportsNativeWebSearch,
+} from "./tools/web-search-tool.ts";
 import { registerWriteStdinTool } from "./tools/write-stdin-tool.ts";
 
 interface AdapterState {
 	enabled: boolean;
 	previousToolNames?: string[];
 	promptSkills: PromptSkill[];
+	pendingWebSearchCount: number;
 }
 
-const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME];
+const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME];
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -26,12 +35,14 @@ function getCommandArg(args: unknown): string | undefined {
 
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, promptSkills: [] };
+	const state: AdapterState = { enabled: false, promptSkills: [], pendingWebSearchCount: 0 };
 	const sessions = createExecSessionManager();
 
 	registerApplyPatchTool(pi);
 	registerExecCommandTool(pi, tracker, sessions);
 	registerWriteStdinTool(pi, sessions);
+	registerWebSearchTool(pi);
+	registerWebSearchMessageRenderer(pi);
 
 	sessions.onSessionExit((_sessionId, command) => {
 		tracker.recordCommandFinished(command);
@@ -71,6 +82,41 @@ export default function codexConversion(pi: ExtensionAPI) {
 				shell: process.env.SHELL || "/bin/bash",
 			}),
 		};
+	});
+
+	pi.on("context", async (event) => {
+		return {
+			messages: event.messages.filter(
+				(message) => !(message.role === "custom" && message.customType === WEB_SEARCH_ACTIVITY_MESSAGE_TYPE),
+			),
+		};
+	});
+
+	pi.on("turn_start", async () => {
+		state.pendingWebSearchCount = 0;
+	});
+
+	pi.on("before_provider_request", async (event, ctx) => {
+		if (!isOpenAICodexContext(ctx)) {
+			return undefined;
+		}
+		if (payloadContainsWebSearchTool(event.payload)) {
+			state.pendingWebSearchCount += 1;
+		}
+		return rewriteNativeWebSearchTool(event.payload, ctx.model);
+	});
+
+	pi.on("agent_end", async () => {
+		if (state.pendingWebSearchCount <= 0) {
+			return;
+		}
+		pi.sendMessage({
+			customType: WEB_SEARCH_ACTIVITY_MESSAGE_TYPE,
+			content: "",
+			display: true,
+			details: { count: state.pendingWebSearchCount },
+		});
+		state.pendingWebSearchCount = 0;
 	});
 }
 
@@ -116,10 +162,14 @@ function setStatus(ctx: ExtensionContext, enabled: boolean): void {
 }
 
 function getAdapterToolNames(ctx: ExtensionContext): string[] {
+	const toolNames = [...CORE_ADAPTER_TOOL_NAMES];
 	if (Array.isArray(ctx.model?.input) && ctx.model.input.includes("image")) {
-		return [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME];
+		toolNames.push(VIEW_IMAGE_TOOL_NAME);
 	}
-	return [...CORE_ADAPTER_TOOL_NAMES];
+	if (supportsNativeWebSearch(ctx.model)) {
+		toolNames.push(WEB_SEARCH_TOOL_NAME);
+	}
+	return toolNames;
 }
 
 export function mergeAdapterTools(activeTools: string[], adapterTools: string[]): string[] {
