@@ -107,6 +107,44 @@ test("drops awk formatting helpers in pipelines", () => {
 	assert.deepEqual(summary.actions, [{ kind: "list", command: "rg --files", path: undefined }]);
 });
 
+test("supports shell wrapper commands and helper pipelines", () => {
+	assert.deepEqual(summarizeShellCommand("bash -lc 'head -n50 Cargo.toml'").actions, [
+		{ kind: "read", command: "head -n50 Cargo.toml", name: "Cargo.toml", path: "Cargo.toml" },
+	]);
+
+	assert.deepEqual(summarizeShellCommand("/bin/bash -lc 'sed -n 1,10p Cargo.toml'").actions, [
+		{ kind: "read", command: "sed -n 1,10p Cargo.toml", name: "Cargo.toml", path: "Cargo.toml" },
+	]);
+
+	assert.deepEqual(summarizeShellCommand("/bin/zsh -lc 'sed -n 1,10p Cargo.toml'").actions, [
+		{ kind: "read", command: "sed -n 1,10p Cargo.toml", name: "Cargo.toml", path: "Cargo.toml" },
+	]);
+
+	assert.deepEqual(summarizeShellCommand("bash -lc 'cd foo && cat foo.txt'").actions, [
+		{ kind: "read", command: "cat foo.txt", name: "foo.txt", path: "foo/foo.txt" },
+	]);
+
+	assert.equal(summarizeShellCommand("bash -lc 'cd foo && bar'").maskAsExplored, false);
+
+	assert.deepEqual(summarizeShellCommand("cat tui/Cargo.toml | sed -n '1,200p'").actions, [
+		{ kind: "read", command: "cat tui/Cargo.toml", name: "Cargo.toml", path: "tui/Cargo.toml" },
+	]);
+
+	assert.deepEqual(summarizeShellCommand("ls -la | sed -n '1,120p'").actions, [
+		{ kind: "list", command: "ls -la", path: undefined },
+	]);
+
+	assert.deepEqual(summarizeShellCommand("yes | rg --files").actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(summarizeShellCommand("rg --files | nl -ba").actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+});
+
+test("supports fd and find summaries", () => {
+	assert.deepEqual(summarizeShellCommand("fd -t f src/").actions, [{ kind: "list", command: "fd -t f src/", path: "src" }]);
+	assert.deepEqual(summarizeShellCommand("fd main src").actions, [{ kind: "search", command: "fd main src", query: "main", path: "src" }]);
+	assert.deepEqual(summarizeShellCommand("find . -name '*.rs'").actions, [{ kind: "search", command: "find . -name *.rs", query: "*.rs", path: "." }]);
+	assert.deepEqual(summarizeShellCommand("find src -type f").actions, [{ kind: "list", command: "find src -type f", path: "src" }]);
+});
+
 test("classifies ripgrep searches separately from command runs", () => {
 	const search = summarizeShellCommand("rg -n adapter pi-codex-conversion");
 	assert.equal(search.maskAsExplored, true);

@@ -76,9 +76,10 @@ export function normalizeTokens(tokens: string[]): string[] {
 	if (tokens.length >= 3 && (tokens[0] === "yes" || tokens[0] === "y" || tokens[0] === "no" || tokens[0] === "n") && tokens[1] === "|") {
 		return normalizeTokens(tokens.slice(2));
 	}
+	const shell = tokens[0]?.replace(/\\/g, "/").split("/").pop();
 	if (
 		tokens.length === 3 &&
-		(tokens[0] === "bash" || tokens[0] === "zsh" || tokens[0].endsWith("/bash") || tokens[0].endsWith("/zsh")) &&
+		(shell === "bash" || shell === "zsh" || shell === "sh") &&
 		(tokens[1] === "-c" || tokens[1] === "-lc")
 	) {
 		return normalizeTokens(shellSplit(tokens[2]));
