@@ -36,7 +36,7 @@ Current date: 2026-03-14
 Current working directory: /tmp/example-workspace`;
 
 test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Codex delta", () => {
-	const prompt = buildCodexSystemPrompt(PI_BASE_PROMPT, { shell: "/bin/fish" });
+	const prompt = buildCodexSystemPrompt(PI_BASE_PROMPT, { shell: "/bin/bash" });
 
 	assert.match(
 		prompt,
@@ -47,7 +47,7 @@ test("buildCodexSystemPrompt preserves Pi-composed sections and adds a narrow Co
 	assert.match(prompt, /^# Project Context$/m);
 	assert.match(prompt, /^## AGENTS\.md$/m);
 	assert.match(prompt, /^# Skills$/m);
-	assert.match(prompt, /^Current shell: \/bin\/fish$/m);
+	assert.match(prompt, /^Current shell: \/bin\/bash$/m);
 	assert.match(prompt, /^Current date: 2026-03-14$/m);
 	assert.match(prompt, /^Current working directory: \/tmp\/example-workspace$/m);
 	assert.match(prompt, /- Prefer a single `apply_patch` call that updates all related files together when one coherent patch will do\./);
@@ -98,14 +98,28 @@ Current working directory: /tmp/example-workspace`,
 	assert.match(prompt, /<\/skills_instructions>/);
 });
 
-test("buildCodexSystemPrompt does not duplicate an existing shell line", () => {
+test("buildCodexSystemPrompt rewrites an existing shell line to the adapter shell", () => {
 	const prompt = buildCodexSystemPrompt(
 		`Prompt
 
 Current shell: /bin/bash
 Current date: 2026-03-14
 Current working directory: /tmp/example-workspace`,
-		{ shell: "/bin/fish" },
+		{ shell: "/bin/zsh" },
+	);
+
+	assert.equal(prompt.match(/^Current shell:/gm)?.length, 1);
+	assert.match(prompt, /^Current shell: \/bin\/zsh$/m);
+});
+
+test("buildCodexSystemPrompt rewrites fish shell lines to bash when codex mode forces bash", () => {
+	const prompt = buildCodexSystemPrompt(
+		`Prompt
+
+Current shell: /usr/bin/fish
+Current date: 2026-03-14
+Current working directory: /tmp/example-workspace`,
+		{ shell: "/bin/bash" },
 	);
 
 	assert.equal(prompt.match(/^Current shell:/gm)?.length, 1);

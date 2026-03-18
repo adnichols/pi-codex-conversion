@@ -3,6 +3,7 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { resolve } from "node:path";
 import type { Readable } from "node:stream";
 import * as pty from "node-pty";
+import { getCodexRuntimeShell } from "../adapter/runtime-shell.ts";
 
 export interface UnifiedExecResult {
 	chunk_id: string;
@@ -77,7 +78,7 @@ function resolveWorkdir(baseCwd: string, workdir?: string): string {
 }
 
 function resolveShell(shell?: string): string {
-	return shell || process.env.SHELL || "/bin/bash";
+	return getCodexRuntimeShell(shell || process.env.SHELL);
 }
 
 function clampYieldTime(yieldTimeMs: number | undefined, fallback: number): number {

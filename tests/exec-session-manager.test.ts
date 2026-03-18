@@ -70,6 +70,52 @@ test("exec_command returns completed for short-lived commands that print before 
 	}
 });
 
+test("exec session manager coerces fish defaults to bash", async () => {
+	const originalShell = process.env.SHELL;
+	process.env.SHELL = "/usr/bin/fish";
+	const sessions = createExecSessionManager();
+	try {
+		const result = await sessions.exec(
+			{
+				cmd: "printf '%s' \"${BASH_VERSION:+bash}\"",
+				login: false,
+				yield_time_ms: 500,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(result.output, "bash");
+		assert.equal(result.exit_code, 0);
+	} finally {
+		sessions.shutdown();
+		if (originalShell === undefined) {
+			delete process.env.SHELL;
+		} else {
+			process.env.SHELL = originalShell;
+		}
+	}
+});
+
+test("exec session manager coerces explicit fish shells to bash", async () => {
+	const sessions = createExecSessionManager();
+	try {
+		const result = await sessions.exec(
+			{
+				cmd: "printf '%s' \"${BASH_VERSION:+bash}\"",
+				shell: "/usr/bin/fish",
+				login: false,
+				yield_time_ms: 500,
+			},
+			process.cwd(),
+		);
+
+		assert.equal(result.output, "bash");
+		assert.equal(result.exit_code, 0);
+	} finally {
+		sessions.shutdown();
+	}
+});
+
 test("write_stdin returns completed when interactive input causes a quick exit", async () => {
 	const sessions = createExecSessionManager();
 	try {

@@ -21,8 +21,11 @@ function insertBeforeTrailingContext(prompt: string, section: string): string {
 }
 
 function injectShell(prompt: string, shell?: string): string {
-	if (!shell || /\nCurrent shell:/.test(prompt)) {
+	if (!shell) {
 		return prompt;
+	}
+	if (/\nCurrent shell:/.test(prompt)) {
+		return prompt.replace(/(^Current shell:) .*$/m, `$1 ${shell}`);
 	}
 	return insertBeforeTrailingContext(prompt, `Current shell: ${shell}`);
 }

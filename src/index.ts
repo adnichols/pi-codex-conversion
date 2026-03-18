@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
 import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
 import { registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
@@ -81,7 +82,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 		return {
 			systemPrompt: buildCodexSystemPrompt(event.systemPrompt, {
 				skills: state.promptSkills,
-				shell: process.env.SHELL || "/bin/bash",
+				shell: getCodexRuntimeShell(process.env.SHELL),
 			}),
 		};
 	});
