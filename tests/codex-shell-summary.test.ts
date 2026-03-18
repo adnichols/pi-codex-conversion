@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasBashAstSupport, parseShellLcPlainCommands } from "../src/shell/bash.ts";
+import { hasBashAstSupport, parseShellLcPlainCommands, parseShellLcSingleCommandPrefix } from "../src/shell/bash.ts";
 import { summarizeShellCommand } from "../src/shell/summary.ts";
 import { isSmallFormattingCommand } from "../src/shell/parse.ts";
 
@@ -94,7 +94,7 @@ test("drops formatting helpers after search and list commands", () => {
 
 	const list = summarizeShellCommand("rg --files | xargs echo");
 	assert.equal(list.maskAsExplored, true);
-	assert.deepEqual(list.actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(list.actions, [{ kind: "list", command: "rg --files" }]);
 });
 
 test("keeps mutating xargs pipelines as raw runs", () => {
@@ -106,7 +106,7 @@ test("keeps mutating xargs pipelines as raw runs", () => {
 test("drops awk formatting helpers in pipelines", () => {
 	const summary = summarizeShellCommand("rg --files | awk '{print $1}'");
 	assert.equal(summary.maskAsExplored, true);
-	assert.deepEqual(summary.actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(summary.actions, [{ kind: "list", command: "rg --files" }]);
 });
 
 test("supports shell wrapper commands and helper pipelines", () => {
@@ -133,11 +133,11 @@ test("supports shell wrapper commands and helper pipelines", () => {
 	]);
 
 	assert.deepEqual(summarizeShellCommand("ls -la | sed -n '1,120p'").actions, [
-		{ kind: "list", command: "ls -la", path: undefined },
+		{ kind: "list", command: "ls -la" },
 	]);
 
-	assert.deepEqual(summarizeShellCommand("yes | rg --files").actions, [{ kind: "list", command: "rg --files", path: undefined }]);
-	assert.deepEqual(summarizeShellCommand("rg --files | nl -ba").actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(summarizeShellCommand("yes | rg --files").actions, [{ kind: "list", command: "rg --files" }]);
+	assert.deepEqual(summarizeShellCommand("rg --files | nl -ba").actions, [{ kind: "list", command: "rg --files" }]);
 });
 
 test("supports fd and find summaries", () => {
@@ -161,7 +161,7 @@ test("covers additional codex parser cases", () => {
 		{ kind: "search", command: "grep -R src/main.rs -n .", query: "src/main.rs", path: "." },
 	]);
 	assert.deepEqual(summarizeShellCommand("grep -R 'COD`EX_SANDBOX' -n").actions, [
-		{ kind: "search", command: "grep -R 'COD`EX_SANDBOX' -n", query: "COD`EX_SANDBOX", path: undefined },
+		{ kind: "search", command: "grep -R 'COD`EX_SANDBOX' -n", query: "COD`EX_SANDBOX" },
 	]);
 	assert.deepEqual(summarizeShellCommand("rg --colors=never -n foo src").actions, [
 		{ kind: "search", command: "rg --colors=never -n foo src", query: "foo", path: "src" },
@@ -196,7 +196,7 @@ test("matches more codex parser scenarios", () => {
 	assert.deepEqual(summarizeShellCommand("git ls-files src").actions, [{ kind: "list", command: "git ls-files src", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand("git status | wc -l").actions, [{ kind: "run", command: "git status | wc -l" }]);
 	assert.deepEqual(summarizeShellCommand("bash -lc 'rg --files webview/src | sed -n'").actions, [{ kind: "list", command: "rg --files webview/src", path: "webview" }]);
-	assert.deepEqual(summarizeShellCommand("bash -lc 'rg --files | head -n 50'").actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(summarizeShellCommand("bash -lc 'rg --files | head -n 50'").actions, [{ kind: "list", command: "rg --files" }]);
 	assert.deepEqual(summarizeShellCommand("rg --files-with-matches TODO src").actions, [{ kind: "search", command: "rg --files-with-matches TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand("rg --files-without-match TODO src").actions, [{ kind: "search", command: "rg --files-without-match TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand("grep --files-with-matches TODO src").actions, [{ kind: "search", command: "grep --files-with-matches TODO src", query: "TODO", path: "src" }]);
@@ -220,10 +220,10 @@ test("matches more codex parser scenarios", () => {
 
 test("matches additional upstream parity scenarios", () => {
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'rg -n "navigate-to-route" -S'`).actions, [
-		{ kind: "search", command: "rg -n navigate-to-route -S", query: "navigate-to-route", path: undefined },
+		{ kind: "search", command: "rg -n navigate-to-route -S", query: "navigate-to-route" },
 	]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'rg -n "BUG|FIXME|TODO|XXX|HACK" -S | head -n 200'`).actions, [
-		{ kind: "search", command: "rg -n 'BUG|FIXME|TODO|XXX|HACK' -S", query: "BUG|FIXME|TODO|XXX|HACK", path: undefined },
+		{ kind: "search", command: "rg -n 'BUG|FIXME|TODO|XXX|HACK' -S", query: "BUG|FIXME|TODO|XXX|HACK" },
 	]);
 	assert.deepEqual(summarizeShellCommand("zsh -lc 'cat README.md'").actions, [
 		{ kind: "read", command: "cat README.md", name: "README.md", path: "README.md" },
@@ -235,19 +235,19 @@ test("matches additional upstream parity scenarios", () => {
 	assert.deepEqual(summarizeShellCommand("egrep -R TODO src").actions, [{ kind: "search", command: "egrep -R TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand("fgrep -l TODO src").actions, [{ kind: "search", command: "fgrep -l TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand("grep -L TODO src").actions, [{ kind: "search", command: "grep -L TODO src", query: "TODO", path: "src" }]);
-	assert.deepEqual(summarizeShellCommand("grep -R COD`EX_SANDBOX -n").actions, [{ kind: "search", command: "grep -R 'COD`EX_SANDBOX' -n", query: "COD`EX_SANDBOX", path: undefined }]);
-	assert.deepEqual(summarizeShellCommand("true && rg --files").actions, [{ kind: "list", command: "rg --files", path: undefined }]);
-	assert.deepEqual(summarizeShellCommand("rg --files && true").actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(summarizeShellCommand("grep -R COD`EX_SANDBOX -n").actions, [{ kind: "search", command: "grep -R 'COD`EX_SANDBOX' -n", query: "COD`EX_SANDBOX" }]);
+	assert.deepEqual(summarizeShellCommand("true && rg --files").actions, [{ kind: "list", command: "rg --files" }]);
+	assert.deepEqual(summarizeShellCommand("rg --files && true").actions, [{ kind: "list", command: "rg --files" }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'tail -n+10 README.md'`).actions, [{ kind: "read", command: "tail -n+10 README.md", name: "README.md", path: "README.md" }]);
-	assert.deepEqual(summarizeShellCommand(`bash -lc 'rg --files | head -n 1'`).actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(summarizeShellCommand(`bash -lc 'rg --files | head -n 1'`).actions, [{ kind: "list", command: "rg --files" }]);
 	assert.deepEqual(summarizeShellCommand(String.raw`cat "pkg\src\main.rs"`).actions, [{ kind: "read", command: String.raw`cat 'pkg\src\main.rs'`, name: "main.rs", path: String.raw`pkg\src\main.rs` }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'echo foo > bar'`).actions, [{ kind: "run", command: "echo foo > bar" }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'rg --version && node -v && pnpm -v && rg --files | wc -l && rg --files | head -n 40'`).actions, [{ kind: "run", command: "rg --version && node -v && pnpm -v && rg --files | wc -l && rg --files | head -n 40" }]);
 	assert.deepEqual(summarizeShellCommand(`rg -l QkBindingController presentation/src/main/java | xargs perl -pi -e 's/QkBindingController/QkController/g'`).actions, [{ kind: "run", command: `rg -l QkBindingController presentation/src/main/java | xargs perl -pi -e s/QkBindingController/QkController/g` }]);
 	assert.deepEqual(summarizeShellCommand(`rg --files | nl -ba | foo`).actions, [{ kind: "run", command: "rg --files | nl -ba | foo" }]);
 	assert.deepEqual(summarizeShellCommand(`sed -n '260,640p' exec/src/event_processor_with_human_output.rs | nl -ba`).actions, [{ kind: "read", command: "sed -n 260,640p exec/src/event_processor_with_human_output.rs", name: "event_processor_with_human_output.rs", path: "exec/src/event_processor_with_human_output.rs" }]);
-	assert.deepEqual(summarizeShellCommand(`yes | rg -n 'foo bar' -S`).actions, [{ kind: "search", command: `rg -n 'foo bar' -S`, query: "foo bar", path: undefined }]);
-	assert.deepEqual(summarizeShellCommand(`ls -I '*.test.js'`).actions, [{ kind: "list", command: `ls -I '*.test.js'`, path: undefined }]);
+	assert.deepEqual(summarizeShellCommand(`yes | rg -n 'foo bar' -S`).actions, [{ kind: "search", command: `rg -n 'foo bar' -S`, query: "foo bar" }]);
+	assert.deepEqual(summarizeShellCommand(`ls -I '*.test.js'`).actions, [{ kind: "list", command: `ls -I '*.test.js'` }]);
 	assert.deepEqual(summarizeShellCommand(`/usr/local/bin/powershell.exe -Command 'Write-Host hi'`).actions, [{ kind: "run", command: "Write-Host hi" }]);
 });
 
@@ -269,14 +269,14 @@ test("covers remaining upstream parser edge cases", () => {
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'cd /Users/pakrym/code/codex && rg -n "codex_api" codex-rs -S | head -n 50'`).actions, [
 		{ kind: "search", command: "rg -n codex_api codex-rs -S", query: "codex_api", path: "codex-rs" },
 	]);
-	assert.deepEqual(summarizeShellCommand(`rg -n 'foo bar' -S`).actions, [{ kind: "search", command: `rg -n 'foo bar' -S`, query: "foo bar", path: undefined }]);
+	assert.deepEqual(summarizeShellCommand(`rg -n 'foo bar' -S`).actions, [{ kind: "search", command: `rg -n 'foo bar' -S`, query: "foo bar" }]);
 	assert.deepEqual(summarizeShellCommand(`grep -R src/main.rs -n .`).actions, [{ kind: "search", command: "grep -R src/main.rs -n .", query: "src/main.rs", path: "." }]);
 	assert.deepEqual(summarizeShellCommand(`ag -l TODO src`).actions, [{ kind: "search", command: "ag -l TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand(`ack -l TODO src`).actions, [{ kind: "search", command: "ack -l TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand(`pt -l TODO src`).actions, [{ kind: "search", command: "pt -l TODO src", query: "TODO", path: "src" }]);
 	assert.deepEqual(summarizeShellCommand(`head -n50 Cargo.toml`).actions, [{ kind: "read", command: "head -n50 Cargo.toml", name: "Cargo.toml", path: "Cargo.toml" }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'head -n50 Cargo.toml'`).actions, [{ kind: "read", command: "head -n50 Cargo.toml", name: "Cargo.toml", path: "Cargo.toml" }]);
-	assert.deepEqual(summarizeShellCommand(`rg --files | head -n 1`).actions, [{ kind: "list", command: "rg --files", path: undefined }]);
+	assert.deepEqual(summarizeShellCommand(`rg --files | head -n 1`).actions, [{ kind: "list", command: "rg --files" }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'tail -n+10 README.md'`).actions, [{ kind: "read", command: "tail -n+10 README.md", name: "README.md", path: "README.md" }]);
 	assert.deepEqual(summarizeShellCommand(`pwsh -NoProfile -c 'Write-Host hi'`).actions, [{ kind: "run", command: "Write-Host hi" }]);
 	assert.equal(isSmallFormattingCommand([]), false);
@@ -303,4 +303,15 @@ test("uses bash AST rejection to avoid false explored summaries", () => {
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'FOO=bar rg --files'`).actions, [{ kind: "run", command: "FOO=bar rg --files" }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'echo "$HOME" && rg --files'`).actions, [{ kind: "run", command: `echo "$HOME" && rg --files` }]);
 	assert.deepEqual(summarizeShellCommand(`bash -lc 'ls || (pwd && echo hi)'`).actions, [{ kind: "run", command: "ls || (pwd && echo hi)" }]);
+});
+
+test("ports bash heredoc single-command prefix parsing", () => {
+	assert.deepEqual(parseShellLcSingleCommandPrefix(["zsh", "-lc", "python3 <<'PY'\nprint('hello')\nPY"]), ["python3"]);
+	assert.deepEqual(parseShellLcSingleCommandPrefix(["zsh", "-lc", "python3 << PY\nprint('hello')\nPY"]), ["python3"]);
+	assert.equal(parseShellLcSingleCommandPrefix(["bash", "-lc", "python3 <<'PY'\nprint('hello')\nPY\necho done"]), undefined);
+	assert.equal(parseShellLcSingleCommandPrefix(["bash", "-lc", "echo hello > /tmp/out.txt"]), undefined);
+	assert.deepEqual(parseShellLcSingleCommandPrefix(["bash", "-lc", "python3 <<'PY' > /tmp/out.txt\nprint('hello')\nPY"]), ["python3"]);
+	assert.equal(parseShellLcSingleCommandPrefix(["bash", "-lc", String.raw`echo hello > /tmp/out.txt && cat /tmp/out.txt`]), undefined);
+	assert.equal(parseShellLcSingleCommandPrefix(["bash", "-lc", String.raw`echo hello <<< "$(pwd)"`]), undefined);
+	assert.equal(parseShellLcSingleCommandPrefix(["bash", "-lc", "echo $HOME <<'PY'\nprint('hello')\nPY"]), undefined);
 });
