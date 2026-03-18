@@ -14,6 +14,77 @@ test("tracks cd prefixes for subsequent read commands", () => {
 	assert.deepEqual(summary.actions, [{ kind: "read", command: "sed -n 1,20p index.ts", name: "index.ts", path: "src/index.ts" }]);
 });
 
+test("ignores printf separators between semicolon-delimited reads", () => {
+	const summary = summarizeShellCommand(
+		"cd vendor/toon; sed -n '1,260p' packages/toon/package.json; printf '\n---README---\n'; sed -n '1,260p' packages/toon/README.md",
+	);
+	assert.equal(summary.maskAsExplored, true);
+	assert.deepEqual(summary.actions, [
+		{
+			kind: "read",
+			command: "sed -n 1,260p packages/toon/package.json",
+			name: "package.json",
+			path: "vendor/toon/packages/toon/package.json",
+		},
+		{
+			kind: "read",
+			command: "sed -n 1,260p packages/toon/README.md",
+			name: "README.md",
+			path: "vendor/toon/packages/toon/README.md",
+		},
+	]);
+});
+
+test("ignores printf separators between connector-delimited reads", () => {
+	const summary = summarizeShellCommand(
+		"cd vendor/toon && sed -n '1,260p' packages/toon/src/index.ts && printf '\n---TYPES---\n' && sed -n '1,260p' packages/toon/src/types.ts",
+	);
+	assert.equal(summary.maskAsExplored, true);
+	assert.deepEqual(summary.actions, [
+		{
+			kind: "read",
+			command: "sed -n 1,260p packages/toon/src/index.ts",
+			name: "index.ts",
+			path: "vendor/toon/packages/toon/src/index.ts",
+		},
+		{
+			kind: "read",
+			command: "sed -n 1,260p packages/toon/src/types.ts",
+			name: "types.ts",
+			path: "vendor/toon/packages/toon/src/types.ts",
+		},
+	]);
+});
+
+test("classifies awk with a file operand as a read", () => {
+	const summary = summarizeShellCommand("awk '{print $1}' Cargo.toml");
+	assert.equal(summary.maskAsExplored, true);
+	assert.deepEqual(summary.actions, [
+		{
+			kind: "read",
+			command: "awk {print $1} Cargo.toml",
+			name: "Cargo.toml",
+			path: "Cargo.toml",
+		},
+	]);
+});
+
+test("classifies python file-walk scripts as explored listing", () => {
+	const py = summarizeShellCommand(`python -c "import os; print(os.listdir('.'))"`);
+	assert.equal(py.maskAsExplored, true);
+	assert.deepEqual(py.actions, [{ kind: "list", command: "python -c import os; print(os.listdir('.'))" }]);
+
+	const py3 = summarizeShellCommand(`python3 -c "import glob; print(glob.glob('*.rs'))"`);
+	assert.equal(py3.maskAsExplored, true);
+	assert.deepEqual(py3.actions, [{ kind: "list", command: "python3 -c import glob; print(glob.glob('*.rs'))" }]);
+});
+
+test("keeps non-file-walking python scripts as raw runs", () => {
+	const summary = summarizeShellCommand(`python -c "print('hello')"`);
+	assert.equal(summary.maskAsExplored, false);
+	assert.deepEqual(summary.actions, [{ kind: "run", command: `python -c "print('hello')"` }]);
+});
+
 test("classifies ripgrep searches separately from command runs", () => {
 	const search = summarizeShellCommand("rg -n adapter pi-codex-conversion");
 	assert.equal(search.maskAsExplored, true);
