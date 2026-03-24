@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
 import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
-import { registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
+import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
 import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
@@ -35,6 +35,16 @@ function getCommandArg(args: unknown): string | undefined {
 	return args.cmd;
 }
 
+function isToolCallOnlyAssistantMessage(message: unknown): boolean {
+	if (!message || typeof message !== "object" || !("role" in message) || message.role !== "assistant") {
+		return false;
+	}
+	if (!("content" in message) || !Array.isArray(message.content) || message.content.length === 0) {
+		return false;
+	}
+	return message.content.every((item) => typeof item === "object" && item !== null && "type" in item && item.type === "toolCall");
+}
+
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
 	const state: AdapterState = { enabled: false, promptSkills: [], webSearchNoticeShown: false };
@@ -46,12 +56,14 @@ export default function codexConversion(pi: ExtensionAPI) {
 	registerWebSearchTool(pi);
 	registerWebSearchSessionNoteRenderer(pi);
 
-	sessions.onSessionExit((_sessionId, command) => {
-		tracker.recordCommandFinished(command);
+	sessions.onSessionExit((sessionId) => {
+		tracker.recordSessionFinished(sessionId);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.webSearchNoticeShown = false;
+		clearApplyPatchRenderState();
+		tracker.clear();
 		syncAdapter(pi, ctx, state);
 	});
 
@@ -59,8 +71,17 @@ export default function codexConversion(pi: ExtensionAPI) {
 		syncAdapter(pi, ctx, state);
 	});
 
+	pi.on("message_start", async (event) => {
+		if (event.message.role === "toolResult") return;
+		if (isToolCallOnlyAssistantMessage(event.message)) return;
+		tracker.resetExplorationGroup();
+	});
+
 	pi.on("tool_execution_start", async (event) => {
-		if (event.toolName !== "exec_command") return;
+		if (event.toolName !== "exec_command") {
+			tracker.resetExplorationGroup();
+			return;
+		}
 		const command = getCommandArg(event.args);
 		if (!command) return;
 		tracker.recordStart(event.toolCallId, command);
@@ -72,6 +93,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		clearApplyPatchRenderState();
 		sessions.shutdown();
 	});
 
