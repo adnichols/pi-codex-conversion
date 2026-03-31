@@ -174,6 +174,9 @@ const renderApplyPatchCallWithOptionalContext: any = (
 	const baseText = context?.expanded
 		? cached?.expanded ?? renderApplyPatchCall(effectivePatchText, cwd)
 		: cached?.collapsed ?? formatApplyPatchSummary(effectivePatchText, cwd);
+	if (baseText.trim().length === 0) {
+		return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
+	}
 	const text = cached?.status === "partial_failure" ? renderPartialFailureCall(baseText, theme, cached.failedTarget) : baseText;
 	return new Text(text, 0, 0);
 };

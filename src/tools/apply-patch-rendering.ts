@@ -24,12 +24,12 @@ export function formatApplyPatchSummary(patchText: string, cwd = process.cwd()):
 	try {
 		actions = parsePatchActions({ text: patchText });
 	} catch {
-		return "apply_patch patch";
+		return "";
 	}
 
 	const files = actions.map((action) => buildFilePreview(action, cwd));
 	if (files.length === 0) {
-		return "apply_patch patch";
+		return "";
 	}
 
 	const totalAdded = files.reduce((sum, file) => sum + file.added, 0);
@@ -56,12 +56,12 @@ export function formatApplyPatchCall(patchText: string, cwd = process.cwd()): st
 	try {
 		actions = parsePatchActions({ text: patchText });
 	} catch {
-		return "apply_patch patch";
+		return "";
 	}
 
 	const files = actions.map((action) => buildFilePreview(action, cwd));
 	if (files.length === 0) {
-		return "apply_patch patch";
+		return "";
 	}
 
 	const totalAdded = files.reduce((sum, file) => sum + file.added, 0);
@@ -92,12 +92,12 @@ export function renderApplyPatchCall(patchText: string, cwd = process.cwd()): st
 	try {
 		actions = parsePatchActions({ text: patchText });
 	} catch {
-		return "apply_patch patch";
+		return "";
 	}
 
 	const files = actions.map((action) => buildFilePreview(action, cwd));
 	if (files.length === 0) {
-		return "apply_patch patch";
+		return "";
 	}
 
 	const totalAdded = files.reduce((sum, file) => sum + file.added, 0);

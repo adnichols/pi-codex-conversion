@@ -94,6 +94,22 @@ test("apply_patch renderCall preserves deleted previews after execution removes 
 	}
 });
 
+test("apply_patch renderCall falls back to the patching placeholder for incomplete patch text", () => {
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const theme = createTheme();
+
+	const rendered = renderComponentText(
+		getTool().renderCall?.(
+			{ input: "*** Begin Patch\n*** Add File: foo.txt\n+hello" },
+			theme,
+			{ toolCallId: "call-incomplete-patch", expanded: false },
+		),
+	);
+
+	assert.equal(rendered, "• Patching");
+});
+
 test("apply_patch renderCall shows partial failure inline after some hunks already applied", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
 	const { pi, getTool } = createRegisteredTool();
