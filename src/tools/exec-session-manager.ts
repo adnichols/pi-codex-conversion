@@ -68,6 +68,7 @@ export interface ExecSessionManager {
 export interface ExecSessionManagerOptions {
 	defaultExecYieldTimeMs?: number;
 	defaultWriteYieldTimeMs?: number;
+	minNonInteractiveExecYieldTimeMs?: number;
 	minEmptyWriteYieldTimeMs?: number;
 }
 
@@ -75,6 +76,7 @@ const DEFAULT_EXEC_YIELD_TIME_MS = 10_000;
 const DEFAULT_WRITE_YIELD_TIME_MS = 250;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const MIN_YIELD_TIME_MS = 250;
+const MIN_NON_INTERACTIVE_EXEC_YIELD_TIME_MS = 5_000;
 const MIN_EMPTY_WRITE_YIELD_TIME_MS = 5_000;
 const MAX_YIELD_TIME_MS = 30_000;
 const MAX_COMMAND_HISTORY = 256;
@@ -144,6 +146,19 @@ function resolveExecution(requestedShell: string | undefined, command: string): 
 function clampYieldTime(yieldTimeMs: number | undefined, fallback: number): number {
 	const value = yieldTimeMs ?? fallback;
 	return Math.min(MAX_YIELD_TIME_MS, Math.max(MIN_YIELD_TIME_MS, value));
+}
+
+function clampExecYieldTime(
+	yieldTimeMs: number | undefined,
+	fallback: number,
+	isInteractive: boolean,
+	minNonInteractiveExecYieldTimeMs: number,
+): number {
+	const value = clampYieldTime(yieldTimeMs, fallback);
+	if (isInteractive) {
+		return value;
+	}
+	return Math.min(MAX_YIELD_TIME_MS, Math.max(minNonInteractiveExecYieldTimeMs, value));
 }
 
 function clampWriteYieldTime(
@@ -336,6 +351,10 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 	const exitListeners = new Set<(sessionId: number, command: string) => void>();
 	const defaultExecYieldTimeMs = options.defaultExecYieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS;
 	const defaultWriteYieldTimeMs = options.defaultWriteYieldTimeMs ?? DEFAULT_WRITE_YIELD_TIME_MS;
+	const minNonInteractiveExecYieldTimeMs = Math.min(
+		MAX_YIELD_TIME_MS,
+		Math.max(MIN_YIELD_TIME_MS, options.minNonInteractiveExecYieldTimeMs ?? MIN_NON_INTERACTIVE_EXEC_YIELD_TIME_MS),
+	);
 	const minEmptyWriteYieldTimeMs = Math.min(
 		MAX_YIELD_TIME_MS,
 		Math.max(MIN_YIELD_TIME_MS, options.minEmptyWriteYieldTimeMs ?? MIN_EMPTY_WRITE_YIELD_TIME_MS),
@@ -520,7 +539,10 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 			sessions.set(session.id, session);
 			rememberCommand(session.id, session.command);
 
-			const waitedMs = await waitForExitOrTimeout(session, clampYieldTime(input.yield_time_ms, defaultExecYieldTimeMs));
+			const waitedMs = await waitForExitOrTimeout(
+				session,
+				clampExecYieldTime(input.yield_time_ms, defaultExecYieldTimeMs, session.interactive, minNonInteractiveExecYieldTimeMs),
+			);
 			return makeResult(session, waitedMs, input.max_output_tokens);
 		},
 		write: async (input) => {

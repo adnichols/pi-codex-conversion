@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createExecSessionManager, type UnifiedExecResult } from "../src/tools/exec-session-manager.ts";
 
 function createFastTestExecSessionManager() {
-	return createExecSessionManager({ minEmptyWriteYieldTimeMs: 50 });
+	return createExecSessionManager({ minNonInteractiveExecYieldTimeMs: 50, minEmptyWriteYieldTimeMs: 50 });
 }
 
 async function finishSession(
@@ -182,8 +182,54 @@ test("write_stdin returns completed when interactive input causes a quick exit",
 	}
 });
 
+test("non-tty exec_command calls clamp tiny waits to the configured minimum", async () => {
+	const sessions = createExecSessionManager({ minNonInteractiveExecYieldTimeMs: 500, minEmptyWriteYieldTimeMs: 50 });
+	try {
+		const start = Date.now();
+		const result = await sessions.exec(
+			{
+				cmd: "sleep 2",
+				shell: "/bin/bash",
+				login: false,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed >= 450, `expected non-interactive exec clamp >= 450ms, got ${elapsed}ms`);
+		assert.equal(typeof result.session_id, "number");
+	} finally {
+		sessions.shutdown();
+	}
+});
+
+test("tty exec_command calls stay responsive and do not use the non-interactive minimum", async () => {
+	const sessions = createExecSessionManager({ minNonInteractiveExecYieldTimeMs: 500, minEmptyWriteYieldTimeMs: 50 });
+	try {
+		const start = Date.now();
+		const result = await sessions.exec(
+			{
+				cmd: "printf ready && read line",
+				shell: "/bin/bash",
+				login: false,
+				tty: true,
+				yield_time_ms: 50,
+			},
+			process.cwd(),
+		);
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed < 450, `expected interactive exec to stay responsive, got ${elapsed}ms`);
+		assert.equal(result.output, "ready");
+		assert.equal(typeof result.session_id, "number");
+	} finally {
+		sessions.shutdown();
+	}
+});
+
 test("empty write_stdin polls are clamped to the configured minimum", async () => {
-	const sessions = createExecSessionManager({ minEmptyWriteYieldTimeMs: 500 });
+	const sessions = createExecSessionManager({ minNonInteractiveExecYieldTimeMs: 50, minEmptyWriteYieldTimeMs: 500 });
 	try {
 		const started = await sessions.exec(
 			{
@@ -212,7 +258,7 @@ test("empty write_stdin polls are clamped to the configured minimum", async () =
 });
 
 test("non-empty write_stdin calls stay responsive and do not use the empty-poll minimum", async () => {
-	const sessions = createExecSessionManager({ minEmptyWriteYieldTimeMs: 500 });
+	const sessions = createExecSessionManager({ minNonInteractiveExecYieldTimeMs: 50, minEmptyWriteYieldTimeMs: 500 });
 	try {
 		const started = await sessions.exec(
 			{

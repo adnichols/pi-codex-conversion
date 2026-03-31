@@ -121,6 +121,7 @@ export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTr
 		promptGuidelines: [
 			"Use exec_command for search, listing files, and local text-file reads.",
 			"Prefer rg or rg --files when possible.",
+			"For short or non-interactive commands, omit `yield_time_ms` so the default wait can avoid unnecessary follow-up calls.",
 			"Keep tty disabled unless the command truly needs interactive terminal behavior.",
 		],
 		parameters: EXEC_COMMAND_PARAMETERS,
