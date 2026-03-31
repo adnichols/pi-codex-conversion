@@ -94,7 +94,7 @@ test("apply_patch renderCall preserves deleted previews after execution removes 
 	}
 });
 
-test("apply_patch renderCall falls back to the patching placeholder for incomplete patch text", () => {
+test("apply_patch renderCall falls back to the patching placeholder while patch args are incomplete", () => {
 	const { pi, getTool } = createRegisteredTool();
 	registerApplyPatchTool(pi);
 	const theme = createTheme();
@@ -103,11 +103,37 @@ test("apply_patch renderCall falls back to the patching placeholder for incomple
 		getTool().renderCall?.(
 			{ input: "*** Begin Patch\n*** Add File: foo.txt\n+hello" },
 			theme,
-			{ toolCallId: "call-incomplete-patch", expanded: false },
+			{ toolCallId: "call-incomplete-patch", expanded: false, argsComplete: false },
 		),
 	);
 
 	assert.equal(rendered, "• Patching");
+});
+
+test("apply_patch renderCall shows edit failed after a non-partial patch failure", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-codex-conversion-"));
+	const { pi, getTool } = createRegisteredTool();
+	registerApplyPatchTool(pi);
+	const theme = createTheme();
+
+	try {
+		const patch = `*** Begin Patch
+*** Frobnicate File: nope.txt
+*** End Patch`;
+		const tool = getTool();
+		const execute = tool.execute;
+		const renderCall = tool.renderCall;
+		assert.ok(execute);
+		assert.ok(renderCall);
+
+		await assert.rejects(() => execute("call-failed-patch", { input: patch }, undefined, undefined, { cwd }));
+
+		const rendered = renderComponentText(renderCall({ input: patch }, theme, { toolCallId: "call-failed-patch", expanded: false, cwd }));
+		assert.equal(rendered, "• Edit failed");
+	} finally {
+		clearApplyPatchRenderState();
+		await rm(cwd, { recursive: true, force: true });
+	}
 });
 
 test("apply_patch renderCall shows partial failure inline after some hunks already applied", async () => {

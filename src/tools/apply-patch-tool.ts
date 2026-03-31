@@ -16,7 +16,7 @@ interface ApplyPatchRenderState {
 	patchText: string;
 	collapsed: string;
 	expanded: string;
-	status: "pending" | "partial_failure";
+	status: "pending" | "partial_failure" | "failed";
 	failedTarget?: string;
 }
 
@@ -58,7 +58,7 @@ function setApplyPatchRenderState(
 	toolCallId: string,
 	patchText: string,
 	cwd: string,
-	status: "pending" | "partial_failure" = "pending",
+	status: "pending" | "partial_failure" | "failed" = "pending",
 	failedTarget?: string,
 ): void {
 	const collapsed = formatApplyPatchSummary(patchText, cwd);
@@ -74,13 +74,17 @@ function setApplyPatchRenderState(
 }
 
 function markApplyPatchPartialFailure(toolCallId: string, failedTarget?: string): void {
+	markApplyPatchFailure(toolCallId, "partial_failure", failedTarget);
+}
+
+function markApplyPatchFailure(toolCallId: string, status: "partial_failure" | "failed", failedTarget?: string): void {
 	const existing = applyPatchRenderStates.get(toolCallId);
 	if (!existing) {
 		return;
 	}
 	applyPatchRenderStates.set(toolCallId, {
 		...existing,
-		status: "partial_failure",
+		status,
 		failedTarget,
 	});
 }
@@ -112,6 +116,36 @@ function renderPartialFailureCall(
 			}
 			if (index === 0) {
 				return theme.fg("warning", line);
+			}
+			return line;
+		})
+		.join("\n");
+}
+
+function renderFailedCall(
+	text: string,
+	theme: { fg(role: string, text: string): string },
+	failedTarget?: string,
+): string {
+	const lines = text.split("\n");
+	if (lines.length === 0) {
+		return theme.fg("error", "• Edit failed");
+	}
+	lines[0] = lines[0].replace(/^• (Added|Edited|Deleted)\b/, "• Edit failed");
+	const failedLineIndexes = new Set<number>();
+	if (failedTarget) {
+		for (let i = 0; i < lines.length; i += 1) {
+			const failedLine = markFailedTargetLine(lines[i], failedTarget);
+			if (failedLine) {
+				lines[i] = failedLine;
+				failedLineIndexes.add(i);
+			}
+		}
+	}
+	return lines
+		.map((line, index) => {
+			if (failedLineIndexes.has(index) || index === 0) {
+				return theme.fg("error", line);
 			}
 			return line;
 		})
@@ -175,9 +209,17 @@ const renderApplyPatchCallWithOptionalContext: any = (
 		? cached?.expanded ?? renderApplyPatchCall(effectivePatchText, cwd)
 		: cached?.collapsed ?? formatApplyPatchSummary(effectivePatchText, cwd);
 	if (baseText.trim().length === 0) {
+		if (cached?.status === "failed") {
+			return new Text(theme.fg("error", "• Edit failed"), 0, 0);
+		}
 		return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
 	}
-	const text = cached?.status === "partial_failure" ? renderPartialFailureCall(baseText, theme, cached.failedTarget) : baseText;
+	const text =
+		cached?.status === "partial_failure"
+			? renderPartialFailureCall(baseText, theme, cached.failedTarget)
+			: cached?.status === "failed"
+				? renderFailedCall(baseText, theme, cached.failedTarget)
+				: baseText;
 	return new Text(text, 0, 0);
 };
 
@@ -222,8 +264,10 @@ export function registerApplyPatchTool(pi: ExtensionAPI): void {
 							} satisfies ApplyPatchPartialFailureDetails,
 						};
 					}
+					markApplyPatchFailure(toolCallId, "failed", failedTarget);
 					throw new Error(message);
 				}
+				markApplyPatchFailure(toolCallId, "failed");
 				throw error;
 			}
 			const summary = [
