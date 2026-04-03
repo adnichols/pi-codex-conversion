@@ -4,7 +4,7 @@ Codex-oriented adapter for [Pi](https://github.com/badlogic/pi-mono).
 
 This package replaces Pi's default Codex/GPT experience with a narrower Codex-like surface while staying close to Pi's own runtime and prompt construction:
 
-- swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, `view_image`, and native OpenAI Codex Responses `web_search` on `openai-codex`
+- swaps active tools to `exec_command`, `write_stdin`, `apply_patch`, `view_image`, and optionally native OpenAI Codex Responses `web_search` on `openai-codex`
 - preserves Pi's composed system prompt and applies a narrow Codex-oriented delta on top
 - renders exec activity with Codex-style command and background-terminal labels
 - renders `apply_patch` calls with Codex-style `Added` / `Edited` / `Deleted` diff blocks and Pi-style colored diff lines
@@ -23,6 +23,8 @@ When the adapter is active, the LLM sees these tools:
 - `apply_patch` — patch tool
 - `view_image` — image-only wrapper around Pi's native image reading, enabled only for image-capable models
 - `web_search` — native OpenAI Codex Responses web search, enabled only on the `openai-codex` provider
+
+You can disable the package's `web_search` registration if you need to avoid conflicts with another Pi extension that already provides a `web_search` tool.
 
 Notably:
 
@@ -80,8 +82,26 @@ pi install ./pi-codex-conversion
 Alternative Git install:
 
 ```bash
-pi install git:github.com/IgorWarzocha/pi-codex-conversion
+pi install git:github.com/adnichols/pi-codex-conversion
 ```
+
+## Disabling `web_search`
+
+You can disable only this package's `web_search` tool while keeping the rest of the adapter active.
+
+Settings-managed default:
+
+```json
+{
+  "piCodexConversion": {
+    "disableWebSearch": true
+  }
+}
+```
+
+The extension checks project `.pi/settings.json` first, then `~/.pi/agent/settings.json`.
+
+The package also registers a `disable-codex-web-search` Pi extension flag, but for startup-time conflict avoidance the settings-managed default is the reliable path because it is available as the extension loads.
 
 ## Publishing
 
@@ -136,7 +156,7 @@ That keeps the prompt much closer to `pi-mono` while still steering the model to
 - Adapter mode activates automatically for OpenAI `gpt*` and `codex*` models.
 - When you switch away from those models, Pi restores the previous active tool set.
 - `view_image` resolves paths against the active session cwd and only exposes `detail: "original"` for Codex-family image-capable models.
-- `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool.
+- `web_search` is exposed only for the `openai-codex` provider and is forwarded as the native OpenAI Codex Responses web search tool unless disabled via flag/settings.
 - `apply_patch` paths stay restricted to the current working directory.
 - partial `apply_patch` failures stay in the original patch block and highlight the failed entry instead of adding a second warning row.
 - `exec_command` / `write_stdin` use a custom PTY-backed session manager via `node-pty` for interactive sessions.

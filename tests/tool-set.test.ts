@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from "../src/adapter/tool-set.ts";
+import { CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME, getManagedAdapterToolNames } from "../src/adapter/tool-set.ts";
 
 test("adapter tool set matches codex-like surface", () => {
 	assert.deepEqual(CORE_ADAPTER_TOOL_NAMES, ["exec_command", "write_stdin", "apply_patch"]);
@@ -9,4 +9,5 @@ test("adapter tool set matches codex-like surface", () => {
 	assert.equal(CORE_ADAPTER_TOOL_NAMES.includes("write"), false);
 	assert.equal(CORE_ADAPTER_TOOL_NAMES.includes("edit"), false);
 	assert.equal(CORE_ADAPTER_TOOL_NAMES.includes("read"), false);
+	assert.deepEqual(getManagedAdapterToolNames(false), ["exec_command", "write_stdin", "apply_patch", "view_image"]);
 });

@@ -136,6 +136,7 @@ test("createWebSearchTool renderResult returns an empty component when collapsed
 			fg: (_role: string, text: string) => text,
 			bold: (text: string) => text,
 		} as never,
+		{} as never,
 	);
 
 	assert.ok(component);

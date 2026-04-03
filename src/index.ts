@@ -1,7 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getCodexRuntimeShell } from "./adapter/runtime-shell.ts";
-import { CORE_ADAPTER_TOOL_NAMES, DEFAULT_TOOL_NAMES, STATUS_KEY, STATUS_TEXT, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from "./adapter/tool-set.ts";
+import {
+	CORE_ADAPTER_TOOL_NAMES,
+	DEFAULT_TOOL_NAMES,
+	STATUS_KEY,
+	STATUS_TEXT,
+	VIEW_IMAGE_TOOL_NAME,
+	WEB_SEARCH_TOOL_NAME,
+	getManagedAdapterToolNames,
+} from "./adapter/tool-set.ts";
 import { clearApplyPatchRenderState, registerApplyPatchTool } from "./tools/apply-patch-tool.ts";
+import { DISABLE_WEB_SEARCH_FLAG, isCodexWebSearchDisabled } from "./config.ts";
 import { isCodexLikeContext, isOpenAICodexContext } from "./adapter/codex-model.ts";
 import { createExecCommandTracker } from "./tools/exec-command-state.ts";
 import { registerExecCommandTool } from "./tools/exec-command-tool.ts";
@@ -24,9 +33,8 @@ interface AdapterState {
 	previousToolNames?: string[];
 	promptSkills: PromptSkill[];
 	webSearchNoticeShown: boolean;
+	webSearchEnabled: boolean;
 }
-
-const ADAPTER_TOOL_NAMES = [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME];
 
 function getCommandArg(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || !("cmd" in args) || typeof args.cmd !== "string") {
@@ -47,13 +55,24 @@ function isToolCallOnlyAssistantMessage(message: unknown): boolean {
 
 export default function codexConversion(pi: ExtensionAPI) {
 	const tracker = createExecCommandTracker();
-	const state: AdapterState = { enabled: false, promptSkills: [], webSearchNoticeShown: false };
+	const state: AdapterState = { enabled: false, promptSkills: [], webSearchNoticeShown: false, webSearchEnabled: false };
 	const sessions = createExecSessionManager();
+	const cwd = process.cwd();
+
+	pi.registerFlag(DISABLE_WEB_SEARCH_FLAG, {
+		description: "Disable the codex-conversion web_search tool.",
+		type: "boolean",
+		default: false,
+	});
+
+	state.webSearchEnabled = !isCodexWebSearchDisabled(pi, cwd);
 
 	registerApplyPatchTool(pi);
 	registerExecCommandTool(pi, tracker, sessions);
 	registerWriteStdinTool(pi, sessions);
-	registerWebSearchTool(pi);
+	if (state.webSearchEnabled) {
+		registerWebSearchTool(pi);
+	}
 	registerWebSearchSessionNoteRenderer(pi);
 
 	sessions.onSessionExit((sessionId) => {
@@ -110,7 +129,7 @@ export default function codexConversion(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_provider_request", async (event, ctx) => {
-		if (!isOpenAICodexContext(ctx)) {
+		if (!state.webSearchEnabled || !isOpenAICodexContext(ctx)) {
 			return undefined;
 		}
 		return rewriteNativeWebSearchTool(event.payload, ctx.model);
@@ -139,7 +158,8 @@ function syncAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterStat
 }
 
 function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
-	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx));
+	const managedAdapterTools = getManagedAdapterToolNames(state.webSearchEnabled);
+	const toolNames = mergeAdapterTools(pi.getActiveTools(), getAdapterToolNames(ctx, state.webSearchEnabled), managedAdapterTools);
 	if (!state.enabled) {
 		// Preserve the previous active set once so switching away from Codex-like
 		// models restores the user's existing Pi tool configuration.
@@ -152,8 +172,9 @@ function enableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterSt
 
 function disableAdapter(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
 	const previousToolNames = state.previousToolNames && state.previousToolNames.length > 0 ? state.previousToolNames : DEFAULT_TOOL_NAMES;
-	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools());
-	if (state.enabled || hasAdapterTools(pi.getActiveTools())) {
+	const managedAdapterTools = getManagedAdapterToolNames(state.webSearchEnabled);
+	const restoredTools = restoreTools(previousToolNames, pi.getActiveTools(), managedAdapterTools);
+	if (state.enabled || hasAdapterTools(pi.getActiveTools(), managedAdapterTools)) {
 		pi.setActiveTools(restoredTools);
 	}
 	if (state.enabled) {
@@ -167,37 +188,40 @@ function setStatus(ctx: ExtensionContext, enabled: boolean): void {
 	ctx.ui.setStatus(STATUS_KEY, enabled ? STATUS_TEXT : undefined);
 }
 
-function getAdapterToolNames(ctx: ExtensionContext): string[] {
+function getAdapterToolNames(ctx: ExtensionContext, webSearchEnabled: boolean): string[] {
 	const toolNames = [...CORE_ADAPTER_TOOL_NAMES];
 	if (Array.isArray(ctx.model?.input) && ctx.model.input.includes("image")) {
 		toolNames.push(VIEW_IMAGE_TOOL_NAME);
 	}
-	if (supportsNativeWebSearch(ctx.model)) {
+	if (webSearchEnabled && supportsNativeWebSearch(ctx.model)) {
 		toolNames.push(WEB_SEARCH_TOOL_NAME);
 	}
 	return toolNames;
 }
 
-export function mergeAdapterTools(activeTools: string[], adapterTools: string[]): string[] {
-	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !ADAPTER_TOOL_NAMES.includes(toolName));
+export function mergeAdapterTools(activeTools: string[], adapterTools: string[], managedAdapterTools = getManagedAdapterToolNames()): string[] {
+	const preservedTools = activeTools.filter((toolName) => !DEFAULT_TOOL_NAMES.includes(toolName) && !managedAdapterTools.includes(toolName));
 	return [...adapterTools, ...preservedTools];
 }
 
-export function restoreTools(previousTools: string[], activeTools: string[]): string[] {
+export function restoreTools(previousTools: string[], activeTools: string[], managedAdapterTools = getManagedAdapterToolNames()): string[] {
 	const restored = [...previousTools];
 	for (const toolName of activeTools) {
-		if (!ADAPTER_TOOL_NAMES.includes(toolName) && !restored.includes(toolName)) {
+		if (!managedAdapterTools.includes(toolName) && !restored.includes(toolName)) {
 			restored.push(toolName);
 		}
 	}
 	return restored;
 }
 
-function hasAdapterTools(activeTools: string[]): boolean {
-	return activeTools.some((toolName) => ADAPTER_TOOL_NAMES.includes(toolName));
+function hasAdapterTools(activeTools: string[], managedAdapterTools = getManagedAdapterToolNames()): boolean {
+	return activeTools.some((toolName) => managedAdapterTools.includes(toolName));
 }
 
 function maybeShowWebSearchSessionNote(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState): void {
+	if (!state.webSearchEnabled) {
+		return;
+	}
 	if (!shouldShowWebSearchSessionNote(ctx.model, ctx.hasUI, state.webSearchNoticeShown)) {
 		return;
 	}

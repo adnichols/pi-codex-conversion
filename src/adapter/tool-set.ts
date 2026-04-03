@@ -6,3 +6,9 @@ export const DEFAULT_TOOL_NAMES = ["read", "bash", "edit", "write"];
 export const CORE_ADAPTER_TOOL_NAMES = ["exec_command", "write_stdin", "apply_patch"];
 export const VIEW_IMAGE_TOOL_NAME = "view_image";
 export const WEB_SEARCH_TOOL_NAME = "web_search";
+
+export function getManagedAdapterToolNames(webSearchEnabled = true): string[] {
+	return webSearchEnabled
+		? [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME, WEB_SEARCH_TOOL_NAME]
+		: [...CORE_ADAPTER_TOOL_NAMES, VIEW_IMAGE_TOOL_NAME];
+}

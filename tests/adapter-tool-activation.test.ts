@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mergeAdapterTools, restoreTools } from "../src/index.ts";
+import { getManagedAdapterToolNames } from "../src/adapter/tool-set.ts";
 
 test("mergeAdapterTools replaces Pi core tools but preserves unrelated active tools", () => {
 	assert.deepEqual(
@@ -20,5 +21,16 @@ test("restoreTools strips adapter tools from mixed startup state while keeping u
 	assert.deepEqual(
 		restoreTools(["read", "bash", "edit", "write"], ["read", "bash", "edit", "write", "apply_patch", "exec_command", "write_stdin", "web_search", "parallel"]),
 		["read", "bash", "edit", "write", "parallel"],
+	);
+});
+
+test("mergeAdapterTools preserves existing non-codex web_search when codex web search is disabled", () => {
+	assert.deepEqual(
+		mergeAdapterTools(
+			["read", "bash", "edit", "write", "web_search", "parallel"],
+			["exec_command", "write_stdin", "apply_patch"],
+			getManagedAdapterToolNames(false),
+		),
+		["exec_command", "write_stdin", "apply_patch", "web_search", "parallel"],
 	);
 });
